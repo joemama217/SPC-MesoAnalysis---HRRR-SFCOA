@@ -1,0 +1,13 @@
+streamlit
+numpy
+pandas
+scipy
+xarray
+h5netcdf
+h5py
+matplotlib
+cartopy
+shapely
+pyproj
+metpy
+requests

@@ -1,0 +1,5 @@
+# Downloaded SFCOA-HRRR data (fetched from NOMADS at run time)
+*.nc
+*.nc.part
+*.zip
+__pycache__/
