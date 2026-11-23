@@ -4,6 +4,7 @@ import re
 import glob
 import time
 import traceback
+import gc
 import threading
 import base64
 import requests
@@ -88,7 +89,8 @@ def _nomads_session():
 def _shared_state():
     """Process-wide state that survives Streamlit reruns (module globals do not)."""
     return {'lock': threading.Lock(), 'file_locks': {}, 'prefetched': set(),
-            'compute_lock': threading.Lock()}
+            'compute_lock': threading.Lock(),
+            'render_slots': threading.BoundedSemaphore(MAX_CONCURRENT_RENDERS)}
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -1585,7 +1587,8 @@ def compute_ptype_spc(ds_main, z_dim):
     above_sfc = p_3d <= p_sfc[None, :, :]
     max_tw_aloft = np.nanmax(np.where(above_sfc, Tw_3d, -99.0), axis=0)
     bl_mask = above_sfc & (p_3d >= (p_sfc[None, :, :] - 150.0))
-    bl_rh = np.nanmean(np.where(bl_mask, rh_3d, np.nan), axis=0)
+    bl_n = np.sum(bl_mask & np.isfinite(rh_3d), axis=0)
+    bl_rh = np.where(bl_n > 0, np.nansum(np.where(bl_mask, rh_3d, 0.0), axis=0) / np.maximum(bl_n, 1), np.nan)
 
     ptype = np.full_like(Tw_sfc, -1, dtype=int)
     active = bl_rh >= 70.0
@@ -2025,8 +2028,7 @@ def _band_legend(fig, ax, levels, colors, label):
 # --- CACHED FAST PNG RENDERER (Native Lambert Conformal Grid + Spatial Crop) ---
 # SPEEDUP: no ttl. The file path is already part of the cache key, so a new NOMADS cycle gets
 # new maps automatically; the old ttl=300 threw away every finished map every 5 minutes.
-@st.cache_data(max_entries=64, show_spinner=False)
-def render_map_png(file_path, parameter, wfo='Full CONUS'):
+def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
     from matplotlib.colors import LinearSegmentedColormap
 
     ds_active, lons, lats, x_proj, y_proj = get_domain_dataset_and_grid(file_path, wfo)
@@ -2074,8 +2076,9 @@ def render_map_png(file_path, parameter, wfo='Full CONUS'):
     ax = fig.add_subplot(1, 1, 1, projection=PROJECTION)
     ax.set_extent(extent, crs=ccrs.PlateCarree())
 
-    ax.add_feature(cfeature.OCEAN, facecolor=PARAMETERS[parameter].get('ocean_color', 'lightskyblue'), zorder=1)
-    ax.add_feature(cfeature.STATES, edgecolor='black', linewidth=1.0, zorder=3)
+    # MEMORY: fixed 50m detail. Cartopy's default switches to the very large 10m files when zoomed in.
+    ax.add_feature(cfeature.OCEAN.with_scale('50m'), facecolor=PARAMETERS[parameter].get('ocean_color', 'lightskyblue'), zorder=1)
+    ax.add_feature(cfeature.STATES.with_scale('50m'), edgecolor='black', linewidth=1.0, zorder=3)
 
     if _CWA_GEOMETRY_CACHE is not None:
         if wfo == 'Full CONUS':
@@ -2511,9 +2514,34 @@ def render_map_png(file_path, parameter, wfo='Full CONUS'):
     return buf.getvalue()
 
 
+# MEMORY: only MAX_CONCURRENT_RENDERS new maps are drawn at once; other requests wait their turn
+# instead of piling up in memory. Maps already drawn come straight from the cache and never wait.
+MAX_CONCURRENT_RENDERS = 1
+
+
+def _release_freed_memory():
+    """Return freed memory to the operating system. Python and NumPy keep freed blocks by default,
+    so memory use only ratchets upward after each big map, and the host counts that against the limit."""
+    try:
+        import ctypes
+        gc.collect()
+        ctypes.CDLL('libc.so.6').malloc_trim(0)
+    except Exception:
+        pass
+
+
+@st.cache_data(max_entries=64, show_spinner=False)
+def render_map_png(file_path, parameter, wfo='Full CONUS'):
+    with _shared_state()['render_slots']:
+        try:
+            return _draw_map_png(file_path, parameter, wfo)
+        finally:
+            _release_freed_memory()
+
+
 # --- LIVE GREEN STATUS BANNER ---
 def render_green_status_banner(file_basename, hour_offset, checked_epoch_ms, checked_utc_str):
-    components.html(
+    (st.iframe if hasattr(st, 'iframe') else components.html)(
         f"""
         <div style="
             background: linear-gradient(90deg, #14532d 0%, #166534 100%);
