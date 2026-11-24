@@ -1299,6 +1299,21 @@ _spc_set('100mb Mean Mixing Ratio', fill_colors=['#7cfe04', '#04ce04', '#048a04'
          fill_hatch=True, vector_color='#8c4624')
 
 
+# --- SPC STYLE MATCHING (batch 4): winter (read from SPC archive 2024-01-13 18Z; SNSQ from live) ---
+_spc_set('Precipitation Type', ptype_fontsize=8.5, ptype_colors={
+    0: '#a4a2a4', 1: '#8c0204', 2: '#ec2e2c', 3: '#ec2e2c', 4: '#942eec', 5: '#942eec',
+    6: '#8c6acc', 7: '#04eeec', 8: '#04b2ec', 9: '#04b2ec', 10: '#04b2ec'})
+_spc_set('Lake Effect Snow 1', rh_fill_colors=['#7cfe04', '#04ce04', '#048a04'],
+         dt_color='#fc7e04', cape_color='#fc0204')
+_spc_set('Lake Effect Snow 2', conv_color='#fc0204', barb_color=SPC_BARB)
+_spc_set('Snow Squall Parameter', cin_colors=['#144e8c', '#1c92fc', '#04b2ec', '#04eeec',
+                                              '#8c6acc', '#942eec', '#8c028c', '#fc02fc', '#fcaebc'])
+_dgz_d = PARAMETERS.get('Dendritic Growth Layer Depth & RH', {}).get('depth_levels', [])
+_spc_set('Dendritic Growth Layer Depth & RH',
+         depth_colors=['#942eec'] * len(_dgz_d), depth_linewidths=[1.1] * len(_dgz_d),
+         rh_colors=['#cc8604', '#cc8604', '#04ce04', '#04ce04', '#048a04'],
+         rh_fill_hatch=True, rh_fill_color='#048a04')
+
 SPC_CATEGORIES = {
     'Surface': [
         'Surface Temp, Dewpoint, and PMSL',
@@ -2670,7 +2685,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
     elif cfg['plot_type'] == 'winter_ptype':
         ptype = _crop(data)
         step_txt = 28 if wfo == 'Full CONUS' else max(5, int(min(ptype.shape) / 18))
-        color_map = {
+        color_map = cfg.get('ptype_colors') or {
             0: '#888888', 1: '#cc0000', 2: '#cc0000', 3: '#cc0000',
             4: '#9900cc', 5: '#9900cc', 6: '#9900cc',
             7: '#00aadd', 8: '#0066cc', 9: '#0044aa', 10: '#555555'
@@ -2682,7 +2697,8 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
                     lo_v, la_v = lons_c[r_i, c_i], lats_c[r_i, c_i]
                     if lon_min <= lo_v <= lon_max and lat_min <= la_v <= lat_max:
                         ax.text(lo_v, la_v, str(code), color=color_map.get(code, '#555555'),
-                                fontsize=8.0, fontweight='bold' if code > 0 else 'normal',
+                                fontsize=cfg.get('ptype_fontsize', 8.0),
+                                fontweight='normal' if cfg.get('ptype_colors') or code == 0 else 'bold',
                                 ha='center', va='center', transform=ccrs.PlateCarree(), zorder=3)
 
     elif cfg['plot_type'] == 'les1':
@@ -2699,20 +2715,20 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         cs_rh = ax.contour(x_sub, y_sub, rh_s, levels=cfg['rh_levels'],
                            colors='black', linestyles='dotted', linewidths=0.8, zorder=2)
         ax.clabel(cs_rh, inline=True, fmt='%d', fontsize=7.5)
-        cs_dt = ax.contour(x_sub, y_sub, dt_s, levels=cfg['dt_levels'], colors='#ff7700', linewidths=1.4, zorder=2.2)
+        cs_dt = ax.contour(x_sub, y_sub, dt_s, levels=cfg['dt_levels'], colors=cfg.get('dt_color', '#ff7700'), linewidths=1.4, zorder=2.2)
         ax.clabel(cs_dt, inline=True, fmt='%d', fontsize=8.5)
-        cs_cape = ax.contour(x_sub, y_sub, cape_s, levels=cfg['cape_levels'], colors='red', linewidths=1.1, zorder=2.4)
+        cs_cape = ax.contour(x_sub, y_sub, cape_s, levels=cfg['cape_levels'], colors=cfg.get('cape_color', 'red'), linewidths=1.1, zorder=2.4)
         ax.clabel(cs_cape, inline=True, fmt='%d', fontsize=8.5)
 
     elif cfg['plot_type'] == 'les2':
         div_1e5 = _crop(data)
         u_bl, v_bl = _crop(wind_data[0]), _crop(wind_data[1])
         div_sub = ndimage.gaussian_filter(np.nan_to_num(div_1e5, nan=0.0), sigma=cfg.get('smoothing', 2.5))[::skip_fill, ::skip_fill]
-        cs_conv = ax.contour(x_sub, y_sub, div_sub, levels=cfg['conv_levels'], colors='red', linewidths=1.2, zorder=2.2)
+        cs_conv = ax.contour(x_sub, y_sub, div_sub, levels=cfg['conv_levels'], colors=cfg.get('conv_color', 'red'), linewidths=1.2, zorder=2.2)
         ax.clabel(cs_conv, inline=True, fmt='%d', fontsize=8.5)
         ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
                  (u_bl * 1.94384)[::skip_barb, ::skip_barb], (v_bl * 1.94384)[::skip_barb, ::skip_barb],
-                 length=4.8, color='peru', linewidth=0.6, transform=ccrs.PlateCarree(), zorder=2.5)
+                 length=4.8, color=cfg.get('barb_color', 'peru'), linewidth=0.6, transform=ccrs.PlateCarree(), zorder=2.5)
         u_c, v_c = np.nan_to_num(u_bl, nan=0.0), np.nan_to_num(v_bl, nan=0.0)
         u_rot, v_rot = PROJECTION.transform_vectors(ccrs.PlateCarree(), lons_c, lats_c, u_c, v_c)
         x_1d = np.linspace(x_c.min(), x_c.max(), 110)
@@ -2729,7 +2745,10 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         sigma_val = cfg.get('smoothing', 1.5)
         depth_s = ndimage.gaussian_filter(np.nan_to_num(_crop(dgz_depth), nan=0.0), sigma=sigma_val)[::skip_fill, ::skip_fill]
         rh_s = ndimage.gaussian_filter(np.nan_to_num(_crop(dgz_rh), nan=0.0), sigma=sigma_val)[::skip_fill, ::skip_fill]
-        ax.contourf(x_sub, y_sub, rh_s, levels=[90, 105], colors=['#00cc00'], alpha=0.35, zorder=1.5)
+        if cfg.get('rh_fill_hatch'):
+            _hatched_bands(ax, x_sub, y_sub, rh_s, [90, 105], [cfg.get('rh_fill_color', '#048a04')], zorder=1.5)
+        else:
+            ax.contourf(x_sub, y_sub, rh_s, levels=[90, 105], colors=['#00cc00'], alpha=0.35, zorder=1.5)
         cs_rh = ax.contour(x_sub, y_sub, rh_s, levels=cfg['rh_levels'],
                            colors=cfg['rh_colors'], linewidths=cfg['rh_linewidths'], zorder=2)
         ax.clabel(cs_rh, inline=True, fmt='%d', fontsize=8.0)
