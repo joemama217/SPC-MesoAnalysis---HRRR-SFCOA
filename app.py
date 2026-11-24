@@ -1162,6 +1162,93 @@ for _n in ('Significant Tornado Parameter (Fixed Layer)', 'Significant Tornado P
              cin_levels=[25, 100, 5000], cin_colors=['#04eeec', '#04b2ec'], cin_alpha=0.85, barb_color=SPC_BARB)
 
 
+# --- SPC STYLE MATCHING (batch 2): remaining composite indices ---
+# NSTP: orange dashed 0.5, orange 1, red 2+
+_nstp_lv = [0.5, 1, 2, 3, 4, 5, 6, 8, 10]
+_spc_set('Non-Supercell Tornado Parameter', levels=_nstp_lv,
+         colors=_by_level(_nstp_lv, [(1, '#fc7e04'), (1e9, '#fc0204')]),
+         linestyles=['dashed' if v < 1 else 'solid' for v in _nstp_lv],
+         linewidths=[1.0 if v < 1 else (1.3 if v == 1 else 1.8) for v in _nstp_lv])
+
+# VTP: STP-style colors; CIN hatched like SPC's VTP map
+_vtp_lv = [0.25, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14]
+_spc_set('Violent Tornado Parameter', levels=_vtp_lv,
+         colors=_by_level(_vtp_lv, [(1, '#fc7e04'), (4, '#fc0204'), (9, '#cc0204'), (1e9, '#8c0204')]),
+         linestyles=['dashed' if v < 1 else 'solid' for v in _vtp_lv],
+         linewidths=[1.0 if v < 1 else (1.4 if v == 1 else 1.9) for v in _vtp_lv],
+         cin_levels=[25, 100, 5000], cin_colors=['#04eeec', '#04b2ec'], cin_hatch=True)
+
+# SHIP: brown dashed 0.5, goldenrod 1-1.5, yellow 2, red 3-4, magenta 5+
+_ship_lv = [0.5, 1, 1.5, 2, 3, 4, 5, 6, 7, 8]
+_spc_set('Significant Hail Parameter', levels=_ship_lv,
+         colors=_by_level(_ship_lv, [(0.5, '#8c4624'), (1.5, '#cc8604'), (2, '#fcd604'), (4, '#fc0204'), (1e9, '#fc02fc')]),
+         linestyles=['dashed' if v < 1 else 'solid' for v in _ship_lv],
+         linewidths=[0.9 if v < 2 else 1.7 for v in _ship_lv])
+
+# LHP: goldenrod dashed 4, yellow 8-12, red 16-20, magenta 24+
+_lhp_lv = list(range(4, 44, 4))
+_spc_set('Large Hail Parameter', levels=_lhp_lv,
+         colors=_by_level(_lhp_lv, [(4, '#cc8604'), (12, '#fcd604'), (20, '#fc0204'), (1e9, '#fc02fc')]),
+         linestyles=['dashed' if v == 4 else 'solid' for v in _lhp_lv],
+         linewidths=[0.9 if v <= 4 else (1.3 if v <= 12 else 1.8) for v in _lhp_lv])
+
+# DCP: thin orange 1, orange-red 2-4, red 6-10, maroon 12+
+_dcp_lv = [1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20]
+_spc_set('Derecho Composite', levels=_dcp_lv,
+         colors=_by_level(_dcp_lv, [(1, '#fc7e04'), (4, '#ec4204'), (10, '#cc0204'), (1e9, '#8c0204')]),
+         linestyles='solid', linewidths=[0.9 if v == 1 else 1.6 for v in _dcp_lv])
+
+# Craven-Brooks: blue 5-15, magenta 20-25, red 30+ (SPC shows no shading)
+_cb = PARAMETERS.get('Craven Brooks Significant Severe', {}).get('levels', [])
+_spc_set('Craven Brooks Significant Severe',
+         colors=_by_level(_cb, [(15, '#0402fc'), (25, '#fc02fc'), (1e9, '#fc0204')]), fill_self=False)
+
+# BRN: same layout as before, SPC's exact colors and pink shading
+_spc_set('Bulk Richardson Number',
+         colors=[{'#b8860b': '#cc8604', '#ff0000': '#fc0204', '#ff00ff': '#fc02fc'}.get(c, c)
+                 for c in PARAMETERS.get('Bulk Richardson Number', {}).get('colors', [])],
+         cin_colors=['#fcaebc'])
+
+# MCS maintenance: goldenrod 10-40, red 50+
+_mcs = PARAMETERS.get('MCS Maintenance', {}).get('levels', [])
+_spc_set('MCS Maintenance', colors=_by_level(_mcs, [(40, '#cc8604'), (1e9, '#fc0204')]))
+
+# Microburst composite: brown dashed 1, orange 2-4, red 5+
+_mb = PARAMETERS.get('Microburst Composite', {}).get('levels', [])
+_spc_set('Microburst Composite', colors=_by_level(_mb, [(1, '#8c4624'), (4, '#fc7e04'), (1e9, '#fc0204')]))
+
+# ESP: orange (0.5 dashed) up to 1.5, red 2-4, magenta 5+
+_esp = PARAMETERS.get('Enhanced Stretching Potential', {}).get('levels', [])
+_spc_set('Enhanced Stretching Potential', colors=_by_level(_esp, [(1.5, '#fc7e04'), (4, '#fc0204'), (1e9, '#fc02fc')]))
+
+# EHI (0-1 and 0-3 km): green dashed 0.5, dark green 1, bright green 2, goldenrod 3+
+_ehi_lv = [0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+for _n in ('Sfc - 1km EHI', 'Sfc - 3km EHI'):
+    _spc_set(_n, levels=_ehi_lv,
+             colors=_by_level(_ehi_lv, [(0.5, '#04ce04'), (1, '#048a04'), (2, '#04ce04'), (1e9, '#cc8604')]),
+             linestyles=['dashed' if v < 1 else 'solid' for v in _ehi_lv],
+             linewidths=[0.9 if v <= 1 else 1.8 for v in _ehi_lv])
+
+# VGP: blue contours every 0.1, goldenrod shear vectors
+_spc_set('Sfc - 3km VGP', colors=['#1c92fc'] * len(PARAMETERS.get('Sfc - 3km VGP', {}).get('levels', [])),
+         barb_color=SPC_BARB)
+
+# 0-3 km MLCAPE (red, every 25 J/kg) + surface vorticity (light blue) + goldenrod winds
+_c3 = list(range(25, 325, 25))
+_spc_set('Sfc Vorticity / Sfc - 3km MLCAPE', cape3_levels=_c3, cape3_colors=['#fc0204'] * len(_c3),
+         cape3_linewidths=[1.6] * len(_c3), vort_color='#04b2ec', barb_color=SPC_BARB)
+
+# SARS hail size: same bands, SPC's exact colors
+_spc_set('SARS Hail Size (in)',
+         cin_colors=['#ffffff00', '#fcfe04', '#fc0204', '#0402fc', '#1c92fc', '#04b2ec', '#04eeec', '#fce6dc'])
+
+# SARS sig-hail %: fill in SPC greens/yellow/red; base-% contours dark red / salmon / purple / cyan
+_sh = PARAMETERS.get('SARS Sig. Hail Percentage', {}).get('levels', [])
+_spc_set('SARS Sig. Hail Percentage',
+         colors=_by_level(_sh, [(5, '#8c0204'), (20, '#fc6a6c'), (75, '#8c6acc'), (1e9, '#04eeec')]),
+         cin_colors=['#048a04', '#7cfe04', '#ecee04', '#fcd604', '#cc0204'])
+
+
 SPC_CATEGORIES = {
     'Surface': [
         'Surface Temp, Dewpoint, and PMSL',
@@ -2443,7 +2530,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         u_kt, v_kt = _crop(wind_data[0]), _crop(wind_data[1])
         vort_sub = ndimage.gaussian_filter(np.nan_to_num(_crop(vort_1e5), nan=0.0), sigma=cfg.get('vort_smoothing', 4.0))[::skip_fill, ::skip_fill]
         cape_sub = ndimage.gaussian_filter(np.nan_to_num(_crop(cape_3km), nan=0.0), sigma=cfg.get('cape_smoothing', 1.5))[::skip_fill, ::skip_fill]
-        cs_vort = ax.contour(x_sub, y_sub, vort_sub, levels=cfg['vort_levels'], colors='#0099ff', linewidths=1.0, zorder=2)
+        cs_vort = ax.contour(x_sub, y_sub, vort_sub, levels=cfg['vort_levels'], colors=cfg.get('vort_color', '#0099ff'), linewidths=1.0, zorder=2)
         ax.clabel(cs_vort, inline=True, fmt='%d', fontsize=8)
         cs_cape3 = ax.contour(x_sub, y_sub, cape_sub, levels=cfg['cape3_levels'],
                               colors=cfg['cape3_colors'], linewidths=cfg['cape3_linewidths'], zorder=2.2)
