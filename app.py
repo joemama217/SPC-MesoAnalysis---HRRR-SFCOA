@@ -1249,6 +1249,56 @@ _spc_set('SARS Sig. Hail Percentage',
          cin_colors=['#048a04', '#7cfe04', '#ecee04', '#fcd604', '#cc0204'])
 
 
+# --- SPC STYLE MATCHING (batch 3): surface, upper air, moisture ---
+# MSLP: black isobars every 2 hPa with goldenrod 10 m wind barbs
+_spc_set('Mean Sea Level Pressure (hPa)', color='black', linewidth=1.8, contour_range=(940, 1072, 2),
+         title='MSL Pressure (hPa) & 10m Wind (kt)', sfc_barbs=True, barb_color=SPC_BARB)
+
+# Mixing ratio / theta: hatched MR bands (SPC legend 9/11/13/15/17/20), blue dashed MR lines,
+# red theta every 2 K, black surface barbs
+_spc_set('Mixing Ratio / Theta',
+         mr_levels=[9, 11, 13, 15, 17, 20, 40],
+         mr_colors=['#04eeec', '#048a04', '#04ce04', '#7cfe04', '#fcd604', '#fcaebc'],
+         mr_hatch=True, mr_contour_levels=list(range(1, 31)), mr_contour_color='#1c92fc',
+         theta_color='#fc0204', sfc_barbs=True, barb_color='black',
+         title='Theta (K, Red), Mixing Ratio (g/kg) & 10m Wind (kt)')
+
+# Moisture convergence: no fill; black MR every 2 g/kg, red convergence, brown barbs
+_spc_set('Moisture Convergence & Mixing Ratio', mr_fill=False, mr_contour_levels=list(range(2, 32, 2)),
+         mconv_color='#fc0204', barb_color='#8c4624')
+
+# 850mb: heights black (3 dam), temp dashed red / blue at or below 0, dewpoint green; no isotach shading
+_spc_set('850mb Wind Speed (kt)', speed_fill=False, temp_dynamic_color=True,
+         temp_cold_color='#0402fc', temp_warm_color='#fc0204',
+         dwpt_levels=list(range(-20, 32, 2)), dwpt_color='#048a04',
+         title='850mb Heights (dam), Temp (°C, dashed), Dewpoint (°C, green) & Wind (kt)')
+
+# 700mb: same temps; 700-500mb mean RH >= 70% hatched dark green with bright green 70/80/90 lines
+_spc_set('700mb Wind Speed (kt)', temp_dynamic_color=True, temp_cold_color='#0402fc', temp_warm_color='#fc0204',
+         rh_hatch=True)
+
+# 500mb: temps all red dashed; hatched isotachs 40/60/80/100/120/140 kt
+_spc_set('500mb Wind Speed (kt)', temp_dynamic_color=False, temp_warm_color='#fc0204',
+         isotach_levels=[40, 60, 80, 100, 120, 140, 400],
+         isotach_colors=['#1c92fc', '#04b2ec', '#04eeec', '#8c6acc', '#942eec', '#8c028c'],
+         title='500mb Heights (dam), Temp (°C), Isotachs (kt, hatched) & Wind (kt)')
+
+# 300mb: hatched isotachs 60/80/100/120/140/160 kt; magenta divergence
+_spc_set('300mb Wind Speed (kt)',
+         isotach_levels=[60, 80, 100, 120, 140, 160, 400],
+         isotach_colors=['#1c92fc', '#04b2ec', '#04eeec', '#8c6acc', '#942eec', '#8c028c'],
+         div_color='#fc02fc',
+         title='300mb Heights (dam), Isotachs (kt, hatched), Divergence (1e-5/s) & Wind (kt)')
+
+# Precipitable water: hatched 1.0/1.5/2.0 in. greens; black lines every 0.1 in.
+for _n in ('Precipitable Water (in)', 'Precipitable Water & 850mb Moisture Transport'):
+    _spc_set(_n, fill_colors=['#7cfe04', '#04ce04', '#048a04'], fill_hatch=True, vector_color='#8c0204')
+
+# 100mb mean mixing ratio: hatched 10-18 g/kg; brown surface streamlines
+_spc_set('100mb Mean Mixing Ratio', fill_colors=['#7cfe04', '#04ce04', '#048a04', '#ecee04', '#fcd604'],
+         fill_hatch=True, vector_color='#8c4624')
+
+
 SPC_CATEGORIES = {
     'Surface': [
         'Surface Temp, Dewpoint, and PMSL',
@@ -1840,6 +1890,13 @@ def get_parameter_data(ds_main, param_key):
             rh_700 = mpcalc.relative_humidity_from_mixing_ratio(700 * units.hPa, ds_level['tmpk'].values * units.K, ds_level['mixr'].values).to('percent')
             rh_500 = mpcalc.relative_humidity_from_mixing_ratio(500 * units.hPa, ds_500['tmpk'].values * units.K, ds_500['mixr'].values).to('percent')
             extra_fields['mean_rh'] = (rh_700.magnitude + rh_500.magnitude) / 2.0
+        if cfg.get('dwpt_levels') is not None and 'mixr' in ds_level.data_vars:
+            q = ds_level['mixr'].values.astype(np.float64)
+            if _mixr_is_g_per_kg(ds_main, z_dim):
+                q = q * 0.001
+            e_hpa = np.maximum(level * q / (0.62198 + q), 1e-3)
+            ln_e = np.log(e_hpa / 6.112)
+            extra_fields['dwpt_c'] = 243.5 * ln_e / (17.67 - ln_e)
         if cfg.get('plot_divergence'):
             u_metric = ds_level['uwin'].values * units('m/s')
             v_metric = ds_level['vwin'].values * units('m/s')
@@ -2235,6 +2292,21 @@ def _band_legend(fig, ax, levels, colors, label):
     return cb
 
 
+def _draw_sfc_barbs(ax, cfg, ds_active, _crop, lons_c, lats_c, skip_barb):
+    """10 m wind barbs (kt) for maps that SPC draws with surface wind, when the map's cfg sets 'sfc_barbs'."""
+    if not cfg.get('sfc_barbs'):
+        return
+    try:
+        u = _crop(ds_active['uwin_10m'].values) * 1.94384
+        v = _crop(ds_active['vwin_10m'].values) * 1.94384
+    except Exception:
+        return
+    ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
+             u[::skip_barb, ::skip_barb], v[::skip_barb, ::skip_barb],
+             length=5, color=cfg.get('barb_color', 'black'), linewidth=0.6,
+             transform=ccrs.PlateCarree(), zorder=3)
+
+
 # --- CACHED FAST PNG RENDERER (Native Lambert Conformal Grid + Spatial Crop) ---
 # SPEEDUP: no ttl. The file path is already part of the cache key, so a new NOMADS cycle gets
 # new maps automatically; the old ttl=300 threw away every finished map every 5 minutes.
@@ -2310,10 +2382,20 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         theta, mixing_ratio = data
         mr_sub = _crop(mixing_ratio)[::skip_fill, ::skip_fill]
         th_sub = _crop(theta)[::skip_fill, ::skip_fill]
-        cf_mr = ax.contourf(x_sub, y_sub, mr_sub, levels=cfg['mr_levels'], colors=cfg['mr_colors'], alpha=0.6, zorder=1.5)
-        fig.colorbar(cf_mr, ax=ax, orientation='horizontal', pad=0.04, shrink=0.72, label='Mixing Ratio (g/kg)')
-        cs_theta = ax.contour(x_sub, y_sub, th_sub, levels=np.arange(240, 360, 2), colors='red', linewidths=1.2, zorder=2)
-        ax.clabel(cs_theta, inline=True, fmt='%d', fontsize=8, colors='red')
+        if cfg.get('mr_hatch'):
+            _hatched_bands(ax, x_sub, y_sub, mr_sub, cfg['mr_levels'], cfg['mr_colors'], zorder=1.5)
+            _band_legend(fig, ax, cfg['mr_levels'], cfg['mr_colors'], 'Mixing Ratio (g/kg)')
+        else:
+            cf_mr = ax.contourf(x_sub, y_sub, mr_sub, levels=cfg['mr_levels'], colors=cfg['mr_colors'], alpha=0.6, zorder=1.5)
+            fig.colorbar(cf_mr, ax=ax, orientation='horizontal', pad=0.04, shrink=0.72, label='Mixing Ratio (g/kg)')
+        if cfg.get('mr_contour_levels') is not None:
+            cs_mrl = ax.contour(x_sub, y_sub, mr_sub, levels=cfg['mr_contour_levels'], colors=cfg.get('mr_contour_color', '#1c92fc'),
+                                linestyles='dashed', linewidths=0.9, zorder=1.8)
+            ax.clabel(cs_mrl, inline=True, fmt='%d', fontsize=7.5)
+        th_c = cfg.get('theta_color', 'red')
+        cs_theta = ax.contour(x_sub, y_sub, th_sub, levels=np.arange(240, 360, 2), colors=th_c, linewidths=1.2, zorder=2)
+        ax.clabel(cs_theta, inline=True, fmt='%d', fontsize=8, colors=th_c)
+        _draw_sfc_barbs(ax, cfg, ds_active, _crop, lons_c, lats_c, skip_barb)
 
     elif cfg['plot_type'] == 'sfc_composite':
         t2m_f, d2m_f, mslp = data
@@ -2383,16 +2465,22 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
     elif cfg['plot_type'] == 'moisture_convergence':
         mr, mconv = data
         u_val, v_val = wind_data
-        cf_mr = ax.contourf(x_sub, y_sub, _crop(mr)[::skip_fill, ::skip_fill], levels=cfg['mr_levels'],
-                            colors=cfg['mr_colors'], alpha=0.6, zorder=1.5)
-        fig.colorbar(cf_mr, ax=ax, orientation='horizontal', pad=0.04, shrink=0.72, label='Mixing Ratio (g/kg)')
+        if cfg.get('mr_fill', True):
+            cf_mr = ax.contourf(x_sub, y_sub, _crop(mr)[::skip_fill, ::skip_fill], levels=cfg['mr_levels'],
+                                colors=cfg['mr_colors'], alpha=0.6, zorder=1.5)
+            fig.colorbar(cf_mr, ax=ax, orientation='horizontal', pad=0.04, shrink=0.72, label='Mixing Ratio (g/kg)')
+        if cfg.get('mr_contour_levels') is not None:
+            cs_mrl = ax.contour(x_sub, y_sub, _smooth(_crop(mr), 1.5)[::skip_fill, ::skip_fill], levels=cfg['mr_contour_levels'],
+                                colors='black', linewidths=0.7, zorder=1.8)
+            ax.clabel(cs_mrl, inline=True, fmt='%d', fontsize=7.5, colors='black')
+        mc_c = cfg.get('mconv_color', 'darkblue')
         cs_mc = ax.contour(x_sub, y_sub, _crop(mconv)[::skip_fill, ::skip_fill], levels=cfg['mconv_levels'],
-                           colors='darkblue', linewidths=1.5, zorder=2)
-        ax.clabel(cs_mc, inline=True, fmt='%d', fontsize=9, colors='darkblue')
+                           colors=mc_c, linewidths=1.5, zorder=2)
+        ax.clabel(cs_mc, inline=True, fmt='%d', fontsize=9, colors=mc_c)
         u_c, v_c = _crop(u_val), _crop(v_val)
         ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
                  u_c[::skip_barb, ::skip_barb], v_c[::skip_barb, ::skip_barb],
-                 length=5, color='black', linewidth=0.6, transform=ccrs.PlateCarree(), zorder=3)
+                 length=5, color=cfg.get('barb_color', 'black'), linewidth=0.6, transform=ccrs.PlateCarree(), zorder=3)
 
     elif cfg['plot_type'] == 'custom_contour':
         data_values = _crop(data)
@@ -2545,11 +2633,15 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         if sigma_val > 0:
             field_vals = ndimage.gaussian_filter(np.nan_to_num(field_vals, nan=0.0), sigma=sigma_val)
         field_sub = field_vals[::skip_fill, ::skip_fill]
-        cf_m = ax.contourf(x_sub, y_sub, field_sub, levels=cfg['fill_levels'],
-                           colors=cfg['fill_colors'], alpha=cfg.get('fill_alpha', 0.55), zorder=1.5)
-        cbar = fig.colorbar(cf_m, ax=ax, orientation='horizontal', pad=0.04, shrink=0.58,
-                            ticks=cfg['fill_ticks'], label=cfg['fill_label'])
-        cbar.ax.set_xticklabels(cfg['fill_ticklabels'])
+        if cfg.get('fill_hatch'):
+            _hatched_bands(ax, x_sub, y_sub, field_sub, cfg['fill_levels'], cfg['fill_colors'], zorder=1.5)
+            _band_legend(fig, ax, cfg['fill_levels'], cfg['fill_colors'], cfg['fill_label'])
+        else:
+            cf_m = ax.contourf(x_sub, y_sub, field_sub, levels=cfg['fill_levels'],
+                               colors=cfg['fill_colors'], alpha=cfg.get('fill_alpha', 0.55), zorder=1.5)
+            cbar = fig.colorbar(cf_m, ax=ax, orientation='horizontal', pad=0.04, shrink=0.58,
+                                ticks=cfg['fill_ticks'], label=cfg['fill_label'])
+            cbar.ax.set_xticklabels(cfg['fill_ticklabels'])
         cs_m = ax.contour(x_sub, y_sub, field_sub, levels=cfg['levels'],
                           colors=cfg.get('contour_color', 'black'), linewidths=cfg.get('contour_width', 1.0), zorder=2)
         ax.clabel(cs_m, inline=True, fmt='%g', fontsize=8.5)
@@ -2560,7 +2652,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
             skip_q = 45 if wfo == 'Full CONUS' else max(6, skip_barb)
             ax.quiver(lons_c[::skip_q, ::skip_q], lats_c[::skip_q, ::skip_q],
                       uq[::skip_q, ::skip_q], vq[::skip_q, ::skip_q],
-                      color='#8b4513', scale=3200, width=0.0028, headwidth=4.0, headlength=4.5,
+                      color=cfg.get('vector_color', '#8b4513'), scale=3200, width=0.0028, headwidth=4.0, headlength=4.5,
                       transform=ccrs.PlateCarree(), zorder=3)
         elif vec_mode == 'streamlines_sfc' and wind_data is not None:
             u_c = np.nan_to_num(_crop(wind_data[0]), nan=0.0)
@@ -2573,7 +2665,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
             _, idx = tree.query(np.column_stack([x_reg.ravel(), y_reg.ravel()]), k=1)
             ax.streamplot(x_1d, y_1d, u_rot.ravel()[idx].reshape(x_reg.shape),
                           v_rot.ravel()[idx].reshape(x_reg.shape),
-                          density=1.6, color='#8b4513', linewidth=0.85, arrowsize=1.0, zorder=3)
+                          density=1.6, color=cfg.get('vector_color', '#8b4513'), linewidth=0.85, arrowsize=1.0, zorder=3)
 
     elif cfg['plot_type'] == 'winter_ptype':
         ptype = _crop(data)
@@ -2649,8 +2741,9 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         start, stop, step = cfg['contour_range']
         clevs = np.arange(start, stop, step)
         cs = ax.contour(x_sub, y_sub, _crop(data)[::skip_fill, ::skip_fill], levels=clevs,
-                        colors=cfg['color'], linewidths=1.5, zorder=2)
+                        colors=cfg['color'], linewidths=cfg.get('linewidth', 1.5), zorder=2)
         ax.clabel(cs, inline=True, fmt='%d', fontsize=9)
+        _draw_sfc_barbs(ax, cfg, ds_active, _crop, lons_c, lats_c, skip_barb)
 
     elif cfg['plot_type'] == 'filled':
         start, stop, step = cfg['contour_range']
@@ -2670,10 +2763,23 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         u_c, v_c = _crop(wind_data[0]), _crop(wind_data[1])
         if cfg.get('plot_rh') and 'mean_rh' in extra_fields:
             rh_sub = _crop(extra_fields['mean_rh'])[::skip_fill, ::skip_fill]
-            ax.contourf(x_sub, y_sub, rh_sub, levels=[70, 100], colors=['#a1d99b'], alpha=0.5, zorder=2)
-            cs_rh = ax.contour(x_sub, y_sub, rh_sub, levels=[70], colors='darkgreen', linewidths=1.2, zorder=2.2)
-            ax.clabel(cs_rh, inline=True, fmt='70%% RH', fontsize=8, colors='darkgreen')
-        else:
+            if cfg.get('rh_hatch'):
+                _hatched_bands(ax, x_sub, y_sub, rh_sub, [70, 101], ['#048a04'], zorder=1.5)
+                _band_legend(fig, ax, [70, 101], ['#048a04'], '700-500mb Mean RH (%)')
+                cs_rh = ax.contour(x_sub, y_sub, rh_sub, levels=[70, 80, 90], colors='#04ce04', linewidths=1.2, zorder=2.2)
+                ax.clabel(cs_rh, inline=True, fmt='%d', fontsize=8, colors='#04ce04')
+            else:
+                ax.contourf(x_sub, y_sub, rh_sub, levels=[70, 100], colors=['#a1d99b'], alpha=0.5, zorder=2)
+                cs_rh = ax.contour(x_sub, y_sub, rh_sub, levels=[70], colors='darkgreen', linewidths=1.2, zorder=2.2)
+                ax.clabel(cs_rh, inline=True, fmt='70%% RH', fontsize=8, colors='darkgreen')
+        elif cfg.get('isotach_levels'):
+            # SPC style: hatched isotach bands + legend, thin navy outlines
+            speed_sub = _crop(data)[::skip_fill, ::skip_fill]
+            _hatched_bands(ax, x_sub, y_sub, speed_sub, cfg['isotach_levels'], cfg['isotach_colors'], zorder=1.5)
+            _band_legend(fig, ax, cfg['isotach_levels'], cfg['isotach_colors'], 'Isotachs (kt)')
+            ax.contour(x_sub, y_sub, speed_sub, levels=cfg['isotach_levels'][:-1], colors='#144e8c',
+                       linewidths=0.6, zorder=1.6)
+        elif cfg.get('speed_fill', True):
             speed_sub = _crop(data)[::skip_fill, ::skip_fill]
             start, stop, step = cfg['contour_range']
             clevs = np.arange(start, stop, step)
@@ -2690,14 +2796,22 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         if 'temp_levels' in cfg and 'temp_c' in extra_fields:
             temp_sub = ndimage.gaussian_filter(_crop(extra_fields['temp_c']), sigma=3)[::skip_fill, ::skip_fill]
             t_levels = cfg['temp_levels']
-            t_colors = ['blue' if t <= 0 else 'red' for t in t_levels] if cfg.get('temp_dynamic_color') else 'red'
+            cold_c, warm_c = cfg.get('temp_cold_color', 'blue'), cfg.get('temp_warm_color', 'red')
+            t_colors = [cold_c if t <= 0 else warm_c for t in t_levels] if cfg.get('temp_dynamic_color') else warm_c
             cs_t = ax.contour(x_sub, y_sub, temp_sub, levels=t_levels, colors=t_colors, linestyles='dashed', linewidths=1.0, zorder=2.5)
             ax.clabel(cs_t, inline=True, fmt='%d', fontsize=8)
 
+        if cfg.get('dwpt_levels') is not None and 'dwpt_c' in extra_fields:
+            td_sub = ndimage.gaussian_filter(_crop(extra_fields['dwpt_c']), sigma=3)[::skip_fill, ::skip_fill]
+            cs_td = ax.contour(x_sub, y_sub, td_sub, levels=cfg['dwpt_levels'], colors=cfg.get('dwpt_color', '#048a04'),
+                               linewidths=1.0, zorder=2.5)
+            ax.clabel(cs_td, inline=True, fmt='%d', fontsize=8)
+
         if 'plot_divergence' in cfg and 'divergence' in extra_fields:
             div_sub = _crop(extra_fields['divergence'])[::skip_fill, ::skip_fill]
-            cs_d = ax.contour(x_sub, y_sub, div_sub, levels=cfg['div_levels'], colors='magenta', linewidths=1.5, zorder=2.5)
-            ax.clabel(cs_d, inline=True, fmt='%d', fontsize=9, colors='magenta')
+            div_c = cfg.get('div_color', 'magenta')
+            cs_d = ax.contour(x_sub, y_sub, div_sub, levels=cfg['div_levels'], colors=div_c, linewidths=1.5, zorder=2.5)
+            ax.clabel(cs_d, inline=True, fmt='%d', fontsize=9, colors=div_c)
 
         ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
                  u_c[::skip_barb, ::skip_barb], v_c[::skip_barb, ::skip_barb],
