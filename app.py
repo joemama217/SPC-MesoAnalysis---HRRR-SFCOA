@@ -1039,6 +1039,129 @@ PARAMETERS = {
     }
 }
 
+# =====================================================================================
+# SPC STYLE MATCHING (batch 1). Levels and colors read from SPC's own mesoanalysis images
+# (archive, 2024-05-21 20Z). Applied on top of PARAMETERS so the originals stay visible above.
+# =====================================================================================
+SPC_BARB = '#cc8604'   # SPC draws most wind/shear/storm-motion vectors in this goldenrod
+
+
+def _by_level(levels, breaks):
+    """Color for each level from [(upper_bound, color), ...] (first bound the level fits under)."""
+    out = []
+    for v in levels:
+        for upper, col in breaks:
+            if v <= upper:
+                out.append(col)
+                break
+    return out
+
+
+def _spc_set(name, **kw):
+    if name in PARAMETERS:
+        PARAMETERS[name].update(kw)
+
+
+# --- CAPE / CIN ---
+_cape_lv = [100, 250, 1000, 2000, 3000, 4000, 5000, 6000, 7000]
+for _n in ('Surface-Based CAPE & CIN', '100mb Mixed-Layer CAPE & CIN'):
+    _spc_set(_n,
+             cape_levels=_cape_lv,
+             cape_colors=_by_level(_cape_lv, [(250, '#fc6a6c'), (3000, '#ec2e2c'), (5000, '#cc0204'), (1e9, '#8c0204')]),
+             cape_linewidths=[0.9 if v < 1000 else 1.7 for v in _cape_lv],
+             cin_levels=[25, 100, 5000], cin_colors=['#04eeec', '#04b2ec'], cin_hatch=True)
+
+_dcape_lv = list(range(200, 3100, 100))
+_spc_set('Downdraft CAPE & DCIN',
+         cape_levels=_dcape_lv,
+         cape_colors=_by_level(_dcape_lv, [(700, '#cc8604'), (900, '#ec4204'), (1e9, '#8c0204')]),
+         cape_linewidths=[0.9 if v <= 700 else (1.3 if v <= 900 else 1.7) for v in _dcape_lv],
+         cape_dynamic_colors=False,
+         cin_levels=[25, 100, 5000], cin_colors=['#04eeec', '#04b2ec'], cin_hatch=True)
+
+# --- Lapse rates: blue dashed <=5.5, green 6-6.5, orange 7-7.5, red >=8 with tan hatching ---
+_lr_lv = [float(v) for v in np.arange(5.0, 12.5, 0.5)]
+for _n, _lw in (('Mid-Level Lapse Rate (700-500mb)', 1.5), ('Low-Level Lapse Rate (0-3km)', 1.0)):
+    _spc_set(_n,
+             levels=_lr_lv,
+             colors=_by_level(_lr_lv, [(5.5, '#04b2ec'), (6.5, '#048a04'), (7.5, '#fc7e04'), (1e9, '#ec2e2c')]),
+             linestyles=['dashed' if v <= 5.5 else 'solid' for v in _lr_lv],
+             linewidths=_lw,
+             hatch_levels=[8.0, 99.0], hatch_colors=['#fca64c'])
+
+# --- LCL: green <=1250 m, black above; hatched 2000/3000/4000 m ---
+_lcl_lv = [500, 750, 1000, 1250, 1500, 1750, 2000, 2500, 3000, 3500, 4000]
+_spc_set('100mb Mixed-Layer LCL Height (m)',
+         levels=_lcl_lv,
+         colors=_by_level(_lcl_lv, [(750, '#048a04'), (1250, '#04ce04'), (1e9, 'black')]),
+         linestyles='solid',
+         linewidths=[1.7 if v <= 1250 else 0.8 for v in _lcl_lv],
+         hatch_levels=[2000, 3000, 4000, 99999], hatch_colors=['#fcd604', '#cc8604', '#8c4624'],
+         hatch_legend='LCL Height (m AGL)')
+
+# --- Bulk shear (kt): light blue -> blue -> navy, goldenrod shear vectors ---
+def _shear(name, levels, breaks):
+    _spc_set(name, levels=levels, colors=_by_level(levels, breaks), linestyles='solid',
+             linewidths=[0.9 if c != '#144e8c' else 1.8 for c in _by_level(levels, breaks)], barb_color=SPC_BARB)
+
+_shear('Effective Bulk Shear (kt)', list(range(20, 110, 10)), [(30, '#04b2ec'), (40, '#1c92fc'), (1e9, '#144e8c')])
+_shear('Surface - 1km Shear (kt)', list(range(10, 90, 10)), [(10, '#1c92fc'), (1e9, '#144e8c')])
+_shear('Surface - 3km Shear (kt)', list(range(20, 110, 10)), [(30, '#04b2ec'), (40, '#1c92fc'), (1e9, '#144e8c')])
+_shear('Surface - 6km Shear (kt)', list(range(30, 130, 10)), [(30, '#04b2ec'), (40, '#1c92fc'), (1e9, '#144e8c')])
+_shear('Surface - 8km Shear (kt)', list(range(30, 130, 10)), [(30, '#04b2ec'), (40, '#1c92fc'), (1e9, '#144e8c')])
+
+# --- Storm-relative winds (kt) ---
+_shear('Surface - 2km SR Winds', list(range(15, 105, 5)), [(15, '#1c92fc'), (1e9, '#144e8c')])
+_shear('4 - 6km SR Winds', list(range(15, 105, 5)), [(15, '#1c92fc'), (1e9, '#144e8c')])
+_shear('9 - 11km SR Winds', [15] + list(range(20, 160, 10)), [(15, '#04b2ec'), (40, '#1c92fc'), (1e9, '#144e8c')])
+
+# --- SRH ---
+_esrh_lv = [50, 100] + list(range(200, 1100, 100))
+for _n in ('Effective SRH & Inflow Base', 'Sfc-500m SRH & Inflow Base'):
+    _spc_set(_n,
+             srh_levels=_esrh_lv, srh_colors=['#144e8c'] * len(_esrh_lv), srh_linestyles='solid',
+             srh_linewidths=[1.0] + [1.7] * (len(_esrh_lv) - 1),
+             eil_levels=[10, 250, 1000, 6000], eil_colors=['#fcaebc', '#fc6a6c', '#ec2e2c'],
+             eil_ticks=[10, 250, 1000], eil_ticklabels=['10', '250', '1000'],
+             eil_hatch=True, barb_color='black')
+_srh1_lv = [50, 100, 150, 200] + list(range(300, 1100, 100))
+_spc_set('Sfc-1km SRH & Inflow Base',
+         plot_eil=False,
+         srh_levels=_srh1_lv,
+         srh_colors=_by_level(_srh1_lv, [(100, '#04b2ec'), (200, '#1c92fc'), (1e9, '#144e8c')]),
+         srh_linestyles='solid',
+         srh_linewidths=[0.9 if v <= 100 else (1.2 if v <= 200 else 1.8) for v in _srh1_lv],
+         barb_color=SPC_BARB)
+_srh3_lv = list(range(100, 1300, 100))
+_spc_set('Sfc-3km SRH',
+         srh_levels=_srh3_lv,
+         srh_colors=_by_level(_srh3_lv, [(100, '#04b2ec'), (200, '#1c92fc'), (1e9, '#144e8c')]),
+         srh_linestyles='solid',
+         srh_linewidths=[0.9 if v <= 100 else (1.2 if v <= 200 else 1.8) for v in _srh3_lv],
+         barb_color=SPC_BARB)
+
+# --- Supercell Composite: blue family; muCIN hatched in reds ---
+_scp_lv = [1, 2, 4, 8, 12, 16, 20, 25, 30, 35, 40, 45, 50]
+_scp_cols = _by_level(_scp_lv, [(1, '#049acc'), (2, '#04b2ec'), (4, '#1c92fc'), (1e9, '#144e8c')])
+_scp_lw = [0.8 if v <= 2 else (1.2 if v <= 4 else 1.9) for v in _scp_lv]
+_scp_cin = dict(cin_levels=[40, 80, 120, 160, 5000], cin_colors=['#fcaebc', '#fc6a6c', '#ec2e2c', '#8c0204'],
+                cin_hatch=True, barb_color=SPC_BARB)
+_spc_set('Supercell Composite (Right-Moving)', levels=_scp_lv, colors=_scp_cols, linestyles='solid',
+         linewidths=_scp_lw, **_scp_cin)
+_spc_set('Supercell Composite (Left-Moving)', levels=[-v for v in reversed(_scp_lv)],
+         colors=list(reversed(_scp_cols)), linestyles='solid', linewidths=list(reversed(_scp_lw)), **_scp_cin)
+
+# --- STP (fixed, effective, 0-500m): orange dashed <1, orange 1, red 2-4, dark red 5-9, maroon 10+ ---
+_stp_lv = [0.25, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 20]
+for _n in ('Significant Tornado Parameter (Fixed Layer)', 'Significant Tornado Parameter (Effective Layer)',
+           'Significant Tornado Parameter (0-500m SRH)'):
+    _spc_set(_n, levels=_stp_lv,
+             colors=_by_level(_stp_lv, [(1, '#fc7e04'), (4, '#fc0204'), (9, '#cc0204'), (1e9, '#8c0204')]),
+             linestyles=['dashed' if v < 1 else 'solid' for v in _stp_lv],
+             linewidths=[1.0 if v < 1 else (1.4 if v == 1 else 1.9) for v in _stp_lv],
+             cin_levels=[25, 100, 5000], cin_colors=['#04eeec', '#04b2ec'], cin_alpha=0.85, barb_color=SPC_BARB)
+
+
 SPC_CATEGORIES = {
     'Surface': [
         'Surface Temp, Dewpoint, and PMSL',
@@ -2195,9 +2318,14 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
                 data_values[nan_mask] = np.nan
             else:
                 data_values = ndimage.gaussian_filter(data_values, sigma=sigma_val)
+        if cfg.get('hatch_levels'):
+            _hatched_bands(ax, x_sub, y_sub, data_values[::skip_fill, ::skip_fill],
+                           cfg['hatch_levels'], cfg['hatch_colors'], zorder=1.5)
+            if cfg.get('hatch_legend'):
+                _band_legend(fig, ax, cfg['hatch_levels'], cfg['hatch_colors'], cfg['hatch_legend'])
         cs = ax.contour(x_sub, y_sub, data_values[::skip_fill, ::skip_fill], levels=cfg['levels'],
                         colors=cfg['colors'], linestyles=cfg.get('linestyles', 'solid'),
-                        linewidths=1.4, zorder=2)
+                        linewidths=cfg.get('linewidths', 1.4), zorder=2)
         ax.clabel(cs, inline=True, fmt=cfg.get('label_fmt', '%g'), fontsize=9)
 
     elif cfg['plot_type'] == 'shear':
@@ -2219,7 +2347,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         ax.clabel(cs, inline=True, fmt='%d', fontsize=8.5)
         ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
                  u_kt[::skip_barb, ::skip_barb], v_kt[::skip_barb, ::skip_barb],
-                 length=5, color='peru', linewidth=0.65, transform=ccrs.PlateCarree(), zorder=3)
+                 length=5, color=cfg.get('barb_color', 'peru'), linewidth=0.65, transform=ccrs.PlateCarree(), zorder=3)
 
     elif cfg['plot_type'] == 'esrh_composite':
         srh, eil_base = data
@@ -2240,12 +2368,17 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
 
         if cfg.get('plot_eil', True) and eil_base is not None:
             eil_vals = _crop(eil_base)
-            cf_eil = ax.contourf(x_sub, y_sub, eil_vals[::skip_fill, ::skip_fill],
-                                 levels=cfg['eil_levels'], colors=cfg['eil_colors'], alpha=0.38, zorder=1.5)
-            cbar = fig.colorbar(cf_eil, ax=ax, orientation='horizontal', pad=0.04, shrink=0.55,
-                                ticks=cfg.get('eil_ticks', [10, 250, 1000]),
-                                label='Effective Inflow Base (m AGL)')
-            cbar.ax.set_xticklabels(cfg.get('eil_ticklabels', ['10', '250', '1000+']))
+            if cfg.get('eil_hatch'):
+                _hatched_bands(ax, x_sub, y_sub, eil_vals[::skip_fill, ::skip_fill],
+                               cfg['eil_levels'], cfg['eil_colors'], zorder=1.5)
+                _band_legend(fig, ax, cfg['eil_levels'], cfg['eil_colors'], 'Effective Inflow Base (m AGL)')
+            else:
+                cf_eil = ax.contourf(x_sub, y_sub, eil_vals[::skip_fill, ::skip_fill],
+                                     levels=cfg['eil_levels'], colors=cfg['eil_colors'], alpha=0.38, zorder=1.5)
+                cbar = fig.colorbar(cf_eil, ax=ax, orientation='horizontal', pad=0.04, shrink=0.55,
+                                    ticks=cfg.get('eil_ticks', [10, 250, 1000]),
+                                    label='Effective Inflow Base (m AGL)')
+                cbar.ax.set_xticklabels(cfg.get('eil_ticklabels', ['10', '250', '1000+']))
 
         cs_srh = ax.contour(x_sub, y_sub, srh_vals[::skip_fill, ::skip_fill], levels=cfg['srh_levels'],
                             colors=cfg['srh_colors'], linestyles=cfg.get('srh_linestyles', 'solid'),
@@ -2253,7 +2386,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         ax.clabel(cs_srh, inline=True, fmt='%d', fontsize=8.5)
         ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
                  u_kt[::skip_barb, ::skip_barb], v_kt[::skip_barb, ::skip_barb],
-                 length=5, color='peru', linewidth=0.65, transform=ccrs.PlateCarree(), zorder=3)
+                 length=5, color=cfg.get('barb_color', 'peru'), linewidth=0.65, transform=ccrs.PlateCarree(), zorder=3)
 
     elif cfg['plot_type'] == 'composite_index':
         idx_val, cin_val = data
@@ -2271,12 +2404,17 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
 
         if cin_val is not None:
             cin_vals = _crop(cin_val)
-            cf_cin = ax.contourf(x_sub, y_sub, cin_vals[::skip_fill, ::skip_fill],
-                                 levels=cfg['cin_levels'], colors=cfg['cin_colors'],
-                                 alpha=cfg.get('cin_alpha', 0.42), zorder=1.5)
-            cbar = fig.colorbar(cf_cin, ax=ax, orientation='horizontal', pad=0.04, shrink=0.58,
-                                ticks=cfg['cin_ticks'], label=cfg.get('cin_label', 'CIN (J/kg)'))
-            cbar.ax.set_xticklabels(cfg['cin_ticklabels'])
+            if cfg.get('cin_hatch'):
+                _hatched_bands(ax, x_sub, y_sub, cin_vals[::skip_fill, ::skip_fill],
+                               cfg['cin_levels'], cfg['cin_colors'], zorder=1.5)
+                _band_legend(fig, ax, cfg['cin_levels'], cfg['cin_colors'], cfg.get('cin_label', 'CIN (J/kg)'))
+            else:
+                cf_cin = ax.contourf(x_sub, y_sub, cin_vals[::skip_fill, ::skip_fill],
+                                     levels=cfg['cin_levels'], colors=cfg['cin_colors'],
+                                     alpha=cfg.get('cin_alpha', 0.42), zorder=1.5)
+                cbar = fig.colorbar(cf_cin, ax=ax, orientation='horizontal', pad=0.04, shrink=0.58,
+                                    ticks=cfg['cin_ticks'], label=cfg.get('cin_label', 'CIN (J/kg)'))
+                cbar.ax.set_xticklabels(cfg['cin_ticklabels'])
 
         if cfg.get('show_max_h', False):
             local_max = (idx_sub == ndimage.maximum_filter(idx_sub, size=18)) & (idx_sub >= 1.5)
@@ -2298,7 +2436,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
             u_kt, v_kt = _crop(wind_data[0]), _crop(wind_data[1])
             ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
                      u_kt[::skip_barb, ::skip_barb], v_kt[::skip_barb, ::skip_barb],
-                     length=5, color='peru', linewidth=0.65, transform=ccrs.PlateCarree(), zorder=3)
+                     length=5, color=cfg.get('barb_color', 'peru'), linewidth=0.65, transform=ccrs.PlateCarree(), zorder=3)
 
     elif cfg['plot_type'] == 'vort_mlcape3':
         vort_1e5, cape_3km = data
@@ -2312,7 +2450,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         ax.clabel(cs_cape3, inline=True, fmt='%d', fontsize=8.5)
         ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
                  u_kt[::skip_barb, ::skip_barb], v_kt[::skip_barb, ::skip_barb],
-                 length=5, color='peru', linewidth=0.65, transform=ccrs.PlateCarree(), zorder=3)
+                 length=5, color=cfg.get('barb_color', 'peru'), linewidth=0.65, transform=ccrs.PlateCarree(), zorder=3)
 
     elif cfg['plot_type'] == 'moisture_field':
         field_vals = _crop(data)
@@ -2486,14 +2624,19 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         cape_plot = ndimage.gaussian_filter(cape_clean, sigma=sigma_val) if sigma_val > 0 else cape_clean
         cin_plot = ndimage.gaussian_filter(cin_clean, sigma=sigma_val) if sigma_val > 0 else cin_clean
 
-        cf_cin = ax.contourf(x_sub, y_sub, cin_plot, levels=cfg['cin_levels'],
-                             colors=cfg['cin_colors'], alpha=0.5, zorder=1.5)
-        cbar = fig.colorbar(cf_cin, ax=ax, orientation='horizontal', pad=0.04, shrink=0.55,
-                            ticks=[25, 100], label='CIN (J/kg)')
-        cbar.ax.set_xticklabels(['25', '100'])
+        if cfg.get('cin_hatch'):
+            _hatched_bands(ax, x_sub, y_sub, cin_plot, cfg['cin_levels'], cfg['cin_colors'], zorder=1.5)
+            _band_legend(fig, ax, cfg['cin_levels'], cfg['cin_colors'], 'CIN (J/kg)')
+        else:
+            cf_cin = ax.contourf(x_sub, y_sub, cin_plot, levels=cfg['cin_levels'],
+                                 colors=cfg['cin_colors'], alpha=0.5, zorder=1.5)
+            cbar = fig.colorbar(cf_cin, ax=ax, orientation='horizontal', pad=0.04, shrink=0.55,
+                                ticks=[25, 100], label='CIN (J/kg)')
+            cbar.ax.set_xticklabels(['25', '100'])
         c_levels = cfg['cape_levels']
         c_colors = ['saddlebrown' if val < 800 else 'red' for val in c_levels] if cfg.get('cape_dynamic_colors') else cfg['cape_colors']
-        cs_cape = ax.contour(x_sub, y_sub, cape_plot, levels=c_levels, colors=c_colors, linewidths=1.2, zorder=2)
+        cs_cape = ax.contour(x_sub, y_sub, cape_plot, levels=c_levels, colors=c_colors,
+                             linewidths=cfg.get('cape_linewidths', 1.2), zorder=2)
         ax.clabel(cs_cape, inline=True, fmt='%d', fontsize=9)
 
     if 'time' in ds_active.coords:
