@@ -75,6 +75,8 @@ ISOBAR_WIDTH = 1.4             # MSLP isobars on every map (was 1.8-2.0)
 HEIGHT_LINE_WIDTH = 0.9        # upper-air height lines (was 1.5, then 1.2)
 BARB_LENGTH = 5.0              # wind barb size on CWA views
 BARB_LENGTH_CONUS = 4.0        # smaller barbs on Full CONUS
+CONTOUR_LABEL_SIZE = 5.5       # numbers on contour lines, every map (was 7.5-9)
+ISOBAR_LABEL_SIZE = 6.0        # isobar and height-line numbers, a step larger (was 9)
 
 # Layering, top to bottom: isobars/heights > everything plotted > red CWA outlines > gray state lines.
 # (Swap the two base-map numbers to put state lines over the CWA outlines instead.)
@@ -2561,11 +2563,11 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         if cfg.get('mr_contour_levels') is not None:
             cs_mrl = ax.contour(x_sub, y_sub, mr_sub, levels=cfg['mr_contour_levels'], colors=cfg.get('mr_contour_color', '#1c92fc'),
                                 linestyles='dashed', linewidths=0.9, zorder=1.8)
-            ax.clabel(cs_mrl, inline=True, fmt='%d', fontsize=7.5)
+            ax.clabel(cs_mrl, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE)
         th_c = cfg.get('theta_color', 'red')
         cs_theta = ax.contour(x_sub, y_sub, th_sub, levels=np.arange(240, 360, 2), colors=th_c,
                               linewidths=cfg.get('theta_linewidth', 1.2), zorder=2)
-        ax.clabel(cs_theta, inline=True, fmt='%d', fontsize=8, colors=th_c)
+        ax.clabel(cs_theta, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE, colors=th_c)
         _draw_sfc_barbs(ax, cfg, ds_active, _crop, lons_c, lats_c, skip_barb, barb_len)
 
     elif cfg['plot_type'] == 'sfc_composite':
@@ -2583,7 +2585,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         # 2. Dewpoint: blue dashed every 4 F
         cs_td = ax.contour(x_sub, y_sub, td_s, levels=cfg['dwpt_levels'], colors=cfg['dwpt_color'],
                            linestyles='dashed', linewidths=cfg.get('dwpt_linewidth', 1.5), zorder=2.0)
-        ax.clabel(cs_td, inline=True, fmt='%d', fontsize=8, colors=cfg['dwpt_color'])
+        ax.clabel(cs_td, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE, colors=cfg['dwpt_color'])
 
         # 3. Temperature: solid every 5 F, colored by range, plus a bold 32 F line
         cold_max, mild_max = cfg['temp_cold_max'], cfg['temp_mild_max']
@@ -2591,13 +2593,13 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         t_levels = list(cfg['temp_levels'])
         t_colors = [c_cold if t <= cold_max else (c_mild if t <= mild_max else c_warm) for t in t_levels]
         cs_t = ax.contour(x_sub, y_sub, t_s, levels=t_levels, colors=t_colors, linewidths=cfg.get('temp_linewidth', 1.0), zorder=2.1)
-        ax.clabel(cs_t, inline=True, fmt='%d', fontsize=8)
+        ax.clabel(cs_t, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE)
         cs_frz = ax.contour(x_sub, y_sub, t_s, levels=[32], colors=cfg['freeze_color'], linewidths=cfg.get('freeze_linewidth', 2.6), zorder=2.2)
-        ax.clabel(cs_frz, inline=True, fmt='%d', fontsize=8.5)
+        ax.clabel(cs_frz, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE)
 
         # 4. MSLP: black solid every 4 hPa
         cs_mslp = ax.contour(x_sub, y_sub, p_s, levels=cfg['mslp_levels'], colors='black', linewidths=ISOBAR_WIDTH, zorder=ISOBAR_ZORDER)
-        ax.clabel(cs_mslp, inline=True, fmt='%d', fontsize=9, colors='black')
+        ax.clabel(cs_mslp, inline=True, fmt='%d', fontsize=ISOBAR_LABEL_SIZE, colors='black')
 
         # 5. 10 m wind barbs
         u_c, v_c = _crop(u_val), _crop(v_val)
@@ -2621,11 +2623,11 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         te_colors = [_te_color(v) for v in te_levels]
         cs_te = ax.contour(x_sub, y_sub, te_s, levels=te_levels, colors=te_colors,
                            linestyles='dashed', linewidths=1.1, zorder=2.0)
-        ax.clabel(cs_te, inline=True, fmt='%d', fontsize=8)
+        ax.clabel(cs_te, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE)
 
         # 2. MSLP: black solid every 2 hPa
         cs_mslp = ax.contour(x_sub, y_sub, p_s, levels=cfg['mslp_levels'], colors='black', linewidths=ISOBAR_WIDTH, zorder=ISOBAR_ZORDER)
-        ax.clabel(cs_mslp, inline=True, fmt='%d', fontsize=9, colors='black')
+        ax.clabel(cs_mslp, inline=True, fmt='%d', fontsize=ISOBAR_LABEL_SIZE, colors='black')
 
         # 3. 10 m wind barbs
         u_c, v_c = _crop(u_val), _crop(v_val)
@@ -2643,11 +2645,11 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         if cfg.get('mr_contour_levels') is not None:
             cs_mrl = ax.contour(x_sub, y_sub, _smooth(_crop(mr), 1.5)[::skip_fill, ::skip_fill], levels=cfg['mr_contour_levels'],
                                 colors='black', linewidths=0.7, zorder=1.8)
-            ax.clabel(cs_mrl, inline=True, fmt='%d', fontsize=7.5, colors='black')
+            ax.clabel(cs_mrl, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE, colors='black')
         mc_c = cfg.get('mconv_color', 'darkblue')
         cs_mc = ax.contour(x_sub, y_sub, _crop(mconv)[::skip_fill, ::skip_fill], levels=cfg['mconv_levels'],
                            colors=mc_c, linewidths=cfg.get('mconv_linewidth', 1.5), zorder=2)
-        ax.clabel(cs_mc, inline=True, fmt='%d', fontsize=9, colors=mc_c)
+        ax.clabel(cs_mc, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE, colors=mc_c)
         u_c, v_c = _crop(u_val), _crop(v_val)
         ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
                  u_c[::skip_barb, ::skip_barb], v_c[::skip_barb, ::skip_barb],
@@ -2672,7 +2674,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         cs = ax.contour(x_sub, y_sub, data_values[::skip_fill, ::skip_fill], levels=cfg['levels'],
                         colors=cfg['colors'], linestyles=cfg.get('linestyles', 'solid'),
                         linewidths=cfg.get('linewidths', 1.4), zorder=2)
-        ax.clabel(cs, inline=True, fmt=cfg.get('label_fmt', '%g'), fontsize=9)
+        ax.clabel(cs, inline=True, fmt=cfg.get('label_fmt', '%g'), fontsize=CONTOUR_LABEL_SIZE)
 
     elif cfg['plot_type'] == 'shear':
         mag_kt = _crop(data)
@@ -2690,7 +2692,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         cs = ax.contour(x_sub, y_sub, mag_kt[::skip_fill, ::skip_fill], levels=cfg['levels'],
                         colors=cfg['colors'], linestyles=cfg.get('linestyles', 'solid'),
                         linewidths=cfg.get('linewidths', 1.4), zorder=2)
-        ax.clabel(cs, inline=True, fmt='%d', fontsize=8.5)
+        ax.clabel(cs, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE)
         ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
                  u_kt[::skip_barb, ::skip_barb], v_kt[::skip_barb, ::skip_barb],
                  length=barb_len, color=cfg.get('barb_color', 'peru'), linewidth=0.65, transform=ccrs.PlateCarree(), zorder=3)
@@ -2729,7 +2731,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         cs_srh = ax.contour(x_sub, y_sub, srh_vals[::skip_fill, ::skip_fill], levels=cfg['srh_levels'],
                             colors=cfg['srh_colors'], linestyles=cfg.get('srh_linestyles', 'solid'),
                             linewidths=cfg.get('srh_linewidths', 1.4), zorder=2)
-        ax.clabel(cs_srh, inline=True, fmt='%d', fontsize=8.5)
+        ax.clabel(cs_srh, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE)
         ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
                  u_kt[::skip_barb, ::skip_barb], v_kt[::skip_barb, ::skip_barb],
                  length=barb_len, color=cfg.get('barb_color', 'peru'), linewidth=0.65, transform=ccrs.PlateCarree(), zorder=3)
@@ -2776,7 +2778,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
             cs_idx = ax.contour(x_sub, y_sub, idx_sub, levels=cfg['levels'],
                                 colors=cfg['colors'], linestyles=cfg.get('linestyles', 'solid'),
                                 linewidths=cfg.get('linewidths', 1.4), zorder=2)
-            ax.clabel(cs_idx, inline=True, fmt='%g', fontsize=8.5)
+            ax.clabel(cs_idx, inline=True, fmt='%g', fontsize=CONTOUR_LABEL_SIZE)
 
         if wind_data is not None:
             u_kt, v_kt = _crop(wind_data[0]), _crop(wind_data[1])
@@ -2790,10 +2792,10 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         vort_sub = ndimage.gaussian_filter(np.nan_to_num(_crop(vort_1e5), nan=0.0), sigma=cfg.get('vort_smoothing', 4.0))[::skip_fill, ::skip_fill]
         cape_sub = ndimage.gaussian_filter(np.nan_to_num(_crop(cape_3km), nan=0.0), sigma=cfg.get('cape_smoothing', 1.5))[::skip_fill, ::skip_fill]
         cs_vort = ax.contour(x_sub, y_sub, vort_sub, levels=cfg['vort_levels'], colors=cfg.get('vort_color', '#0099ff'), linewidths=cfg.get('vort_linewidth', 1.0), zorder=2)
-        ax.clabel(cs_vort, inline=True, fmt='%d', fontsize=8)
+        ax.clabel(cs_vort, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE)
         cs_cape3 = ax.contour(x_sub, y_sub, cape_sub, levels=cfg['cape3_levels'],
                               colors=cfg['cape3_colors'], linewidths=cfg['cape3_linewidths'], zorder=2.2)
-        ax.clabel(cs_cape3, inline=True, fmt='%d', fontsize=8.5)
+        ax.clabel(cs_cape3, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE)
         ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
                  u_kt[::skip_barb, ::skip_barb], v_kt[::skip_barb, ::skip_barb],
                  length=barb_len, color=cfg.get('barb_color', 'peru'), linewidth=0.65, transform=ccrs.PlateCarree(), zorder=3)
@@ -2815,7 +2817,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
             cbar.ax.set_xticklabels(cfg['fill_ticklabels'])
         cs_m = ax.contour(x_sub, y_sub, field_sub, levels=cfg['levels'],
                           colors=cfg.get('contour_color', 'black'), linewidths=cfg.get('contour_width', 1.0), zorder=2)
-        ax.clabel(cs_m, inline=True, fmt='%g', fontsize=8.5)
+        ax.clabel(cs_m, inline=True, fmt='%g', fontsize=CONTOUR_LABEL_SIZE)
 
         vec_mode = cfg.get('vector_mode')
         if vec_mode == 'quiver_850_mtrans' and wind_data is not None:
@@ -2870,18 +2872,18 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         cbar.ax.set_xticklabels(['70', '80', '90'])
         cs_rh = ax.contour(x_sub, y_sub, rh_s, levels=cfg['rh_levels'],
                            colors='black', linestyles='dotted', linewidths=0.8, zorder=2)
-        ax.clabel(cs_rh, inline=True, fmt='%d', fontsize=7.5)
+        ax.clabel(cs_rh, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE)
         cs_dt = ax.contour(x_sub, y_sub, dt_s, levels=cfg['dt_levels'], colors=cfg.get('dt_color', '#ff7700'), linewidths=1.4, zorder=2.2)
-        ax.clabel(cs_dt, inline=True, fmt='%d', fontsize=8.5)
+        ax.clabel(cs_dt, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE)
         cs_cape = ax.contour(x_sub, y_sub, cape_s, levels=cfg['cape_levels'], colors=cfg.get('cape_color', 'red'), linewidths=1.1, zorder=2.4)
-        ax.clabel(cs_cape, inline=True, fmt='%d', fontsize=8.5)
+        ax.clabel(cs_cape, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE)
 
     elif cfg['plot_type'] == 'les2':
         div_1e5 = _crop(data)
         u_bl, v_bl = _crop(wind_data[0]), _crop(wind_data[1])
         div_sub = ndimage.gaussian_filter(np.nan_to_num(div_1e5, nan=0.0), sigma=cfg.get('smoothing', 2.5))[::skip_fill, ::skip_fill]
         cs_conv = ax.contour(x_sub, y_sub, div_sub, levels=cfg['conv_levels'], colors=cfg.get('conv_color', 'red'), linewidths=1.2, zorder=2.2)
-        ax.clabel(cs_conv, inline=True, fmt='%d', fontsize=8.5)
+        ax.clabel(cs_conv, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE)
         ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
                  (u_bl * 1.94384)[::skip_barb, ::skip_barb], (v_bl * 1.94384)[::skip_barb, ::skip_barb],
                  length=barb_len, color=cfg.get('barb_color', 'peru'), linewidth=0.6, transform=ccrs.PlateCarree(), zorder=2.5)
@@ -2907,17 +2909,17 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
             ax.contourf(x_sub, y_sub, rh_s, levels=[90, 105], colors=['#00cc00'], alpha=0.35, zorder=1.5)
         cs_rh = ax.contour(x_sub, y_sub, rh_s, levels=cfg['rh_levels'],
                            colors=cfg['rh_colors'], linewidths=cfg['rh_linewidths'], zorder=2)
-        ax.clabel(cs_rh, inline=True, fmt='%d', fontsize=8.0)
+        ax.clabel(cs_rh, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE)
         cs_depth = ax.contour(x_sub, y_sub, depth_s, levels=cfg['depth_levels'],
                               colors=cfg['depth_colors'], linewidths=cfg['depth_linewidths'], zorder=2.3)
-        ax.clabel(cs_depth, inline=True, fmt='%d', fontsize=8.5)
+        ax.clabel(cs_depth, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE)
 
     elif cfg['plot_type'] == 'contour':
         start, stop, step = cfg['contour_range']
         clevs = np.arange(start, stop, step)
         cs = ax.contour(x_sub, y_sub, _crop(data)[::skip_fill, ::skip_fill], levels=clevs,
                         colors=cfg['color'], linewidths=cfg.get('linewidth', 1.5), zorder=ISOBAR_ZORDER)
-        ax.clabel(cs, inline=True, fmt='%d', fontsize=9)
+        ax.clabel(cs, inline=True, fmt='%d', fontsize=ISOBAR_LABEL_SIZE)
         _draw_sfc_barbs(ax, cfg, ds_active, _crop, lons_c, lats_c, skip_barb, barb_len)
 
     elif cfg['plot_type'] == 'filled':
@@ -2927,7 +2929,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         cf = ax.contourf(x_sub, y_sub, data_sub, levels=clevs, cmap=cfg['cmap'], alpha=0.7, zorder=2)
         fig.colorbar(cf, ax=ax, orientation='horizontal', pad=0.04, shrink=0.72, label=cfg['title'])
         cs = ax.contour(x_sub, y_sub, data_sub, levels=clevs, colors='black', linewidths=0.3, alpha=0.5, zorder=2)
-        ax.clabel(cs, inline=True, fmt='%d', fontsize=8, colors='black')
+        ax.clabel(cs, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE, colors='black')
         if wind_data:
             u_c, v_c = _crop(wind_data[0]), _crop(wind_data[1])
             sb = 15 if wfo == 'Full CONUS' else max(4, skip_barb // 2)
@@ -2942,11 +2944,11 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
                 _hatched_bands(ax, x_sub, y_sub, rh_sub, [70, 101], ['#048a04'], zorder=1.5)
                 _band_legend(fig, ax, [70, 101], ['#048a04'], '700-500mb Mean RH (%)')
                 cs_rh = ax.contour(x_sub, y_sub, rh_sub, levels=[70, 80, 90], colors='#04ce04', linewidths=1.2, zorder=2.2)
-                ax.clabel(cs_rh, inline=True, fmt='%d', fontsize=8, colors='#04ce04')
+                ax.clabel(cs_rh, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE, colors='#04ce04')
             else:
                 ax.contourf(x_sub, y_sub, rh_sub, levels=[70, 100], colors=['#a1d99b'], alpha=0.5, zorder=2)
                 cs_rh = ax.contour(x_sub, y_sub, rh_sub, levels=[70], colors='darkgreen', linewidths=1.2, zorder=2.2)
-                ax.clabel(cs_rh, inline=True, fmt='70%% RH', fontsize=8, colors='darkgreen')
+                ax.clabel(cs_rh, inline=True, fmt='70%% RH', fontsize=CONTOUR_LABEL_SIZE, colors='darkgreen')
         elif cfg.get('isotach_levels'):
             # SPC style: hatched isotach bands + legend, thin navy outlines
             speed_sub = _crop(data)[::skip_fill, ::skip_fill]
@@ -2963,12 +2965,12 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
             cf = ax.contourf(x_sub, y_sub, speed_sub, levels=clevs, cmap=cfg['cmap'], alpha=0.7, zorder=2)
             fig.colorbar(cf, ax=ax, orientation='horizontal', pad=0.04, shrink=0.72, label=cfg['title'])
             cs = ax.contour(x_sub, y_sub, speed_sub, levels=clevs, colors='black', linewidths=0.3, alpha=0.5, zorder=2)
-            ax.clabel(cs, inline=True, fmt='%d', fontsize=8, colors='black')
+            ax.clabel(cs, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE, colors='black')
 
         if 'height_levels' in cfg and 'heights_dam' in extra_fields:
             hght_sub = ndimage.gaussian_filter(_crop(extra_fields['heights_dam']), sigma=3)[::skip_fill, ::skip_fill]
             cs_h = ax.contour(x_sub, y_sub, hght_sub, levels=cfg['height_levels'], colors='black', linewidths=HEIGHT_LINE_WIDTH, zorder=ISOBAR_ZORDER)
-            ax.clabel(cs_h, inline=True, fmt='%d', fontsize=9, colors='black')
+            ax.clabel(cs_h, inline=True, fmt='%d', fontsize=ISOBAR_LABEL_SIZE, colors='black')
 
         if 'temp_levels' in cfg and 'temp_c' in extra_fields:
             temp_sub = ndimage.gaussian_filter(_crop(extra_fields['temp_c']), sigma=3)[::skip_fill, ::skip_fill]
@@ -2976,20 +2978,20 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
             cold_c, warm_c = cfg.get('temp_cold_color', 'blue'), cfg.get('temp_warm_color', 'red')
             t_colors = [cold_c if t <= 0 else warm_c for t in t_levels] if cfg.get('temp_dynamic_color') else warm_c
             cs_t = ax.contour(x_sub, y_sub, temp_sub, levels=t_levels, colors=t_colors, linestyles='dashed', linewidths=1.0, zorder=2.5)
-            ax.clabel(cs_t, inline=True, fmt='%d', fontsize=8)
+            ax.clabel(cs_t, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE)
 
         if cfg.get('dwpt_levels') is not None and 'dwpt_c' in extra_fields:
             td_sub = ndimage.gaussian_filter(_crop(extra_fields['dwpt_c']), sigma=3)[::skip_fill, ::skip_fill]
             cs_td = ax.contour(x_sub, y_sub, td_sub, levels=cfg['dwpt_levels'], colors=cfg.get('dwpt_color', '#048a04'),
                                linewidths=1.0, zorder=2.5)
-            ax.clabel(cs_td, inline=True, fmt='%d', fontsize=8)
+            ax.clabel(cs_td, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE)
 
         if 'plot_divergence' in cfg and 'divergence' in extra_fields:
             div_sub = _crop(extra_fields['divergence'])[::skip_fill, ::skip_fill]
             div_c = cfg.get('div_color', 'magenta')
             cs_d = ax.contour(x_sub, y_sub, div_sub, levels=cfg['div_levels'], colors=div_c,
                               linewidths=cfg.get('div_linewidth', 1.5), zorder=2.5)
-            ax.clabel(cs_d, inline=True, fmt='%d', fontsize=9, colors=div_c)
+            ax.clabel(cs_d, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE, colors=div_c)
 
         ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
                  u_c[::skip_barb, ::skip_barb], v_c[::skip_barb, ::skip_barb],
@@ -3016,7 +3018,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         c_colors = ['saddlebrown' if val < 800 else 'red' for val in c_levels] if cfg.get('cape_dynamic_colors') else cfg['cape_colors']
         cs_cape = ax.contour(x_sub, y_sub, cape_plot, levels=c_levels, colors=c_colors,
                              linewidths=cfg.get('cape_linewidths', 1.2), zorder=2)
-        ax.clabel(cs_cape, inline=True, fmt='%d', fontsize=9)
+        ax.clabel(cs_cape, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE)
 
     if 'time' in ds_active.coords:
         run_time = pd.to_datetime(ds_active.coords['time'].values).strftime('%Y-%m-%d %H:%M UTC')
