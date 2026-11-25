@@ -17,6 +17,7 @@ import pandas as pd
 import matplotlib
 import matplotlib.cm
 from matplotlib.figure import Figure
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 import matplotlib.colors as mcolors
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -88,6 +89,12 @@ COUNTY_LINE_COLOR = '#cccacc'  # a shade lighter than the state gray
 COUNTY_LINE_WIDTH = 0.25       # thinner than the CWA outlines
 OCEAN_COLOR = 'white'          # SPC leaves water white
 
+# Speed settings
+BASEMAP_CACHE_ENABLED = True   # draw the base map once per area and reuse it (False = draw it every time)
+BASEMAP_SUPERSAMPLE = 1.3      # base-map image resolution relative to RENDER_DPI
+PREDRAW_CONUS = True           # draw every Full CONUS map in the background when a new hour arrives
+LOG_TIMINGS = True             # print per-map timing lines to the app log (Manage app > logs)
+
 
 # --- NOMADS: ONE SHARED RUN LIST + ONE-TIME FILE DOWNLOADS ---
 # SPEEDUP: previously every slider position scraped NOMADS separately (its own 5-minute cache per
@@ -113,7 +120,8 @@ def _shared_state():
     """Process-wide state that survives Streamlit reruns (module globals do not)."""
     return {'lock': threading.Lock(), 'file_locks': {}, 'prefetched': set(),
             'compute_lock': threading.Lock(),
-            'render_slots': threading.BoundedSemaphore(MAX_CONCURRENT_RENDERS)}
+            'render_slots': threading.BoundedSemaphore(MAX_CONCURRENT_RENDERS),
+            'users_waiting': 0, 'predrawn': set(), 'views': {}}
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -190,6 +198,61 @@ def download_sfcoa(hour_offset=0):
     return fetch_run_file(date_str, fname), note, checked_epoch_ms, checked_utc_str
 
 
+def start_conus_predraw():
+    """When a new hour arrives, draw every Full CONUS map in the background, one at a time, always
+    stepping aside while a user is waiting for a map."""
+    if not PREDRAW_CONUS:
+        return
+    try:
+        runs, _, _ = list_available_runs()
+        latest = fetch_run_file(runs[0][0], runs[0][1])
+    except Exception:
+        return
+    state = _shared_state()
+    with state['lock']:
+        if latest in state['predrawn']:
+            return
+        state['predrawn'].add(latest)
+    order = [p for items in MENU_TREE.values() for p in items]
+
+    def _worker():
+        t0 = time.perf_counter(); done = 0
+        for prm in order:
+            while state['users_waiting'] > 0:       # let people go first
+                time.sleep(0.5)
+            try:
+                render_map_png(latest, prm, 'Full CONUS')
+                done += 1
+            except Exception as e:
+                print(f"[predraw] {prm} failed: {e}", flush=True)
+            time.sleep(0.3)
+        print(f"[predraw] {done}/{len(order)} Full CONUS maps ready for {os.path.basename(latest)} "
+              f"in {time.perf_counter() - t0:.0f}s", flush=True)
+
+    threading.Thread(target=_worker, daemon=True, name='predraw').start()
+
+
+def record_view(parameter, wfo, hour_offset):
+    """Count what people actually open (once per change of selection), to decide what to pre-draw."""
+    key = (parameter, wfo, hour_offset)
+    if st.session_state.get('_last_view') == key:
+        return
+    st.session_state['_last_view'] = key
+    state = _shared_state()
+    with state['lock']:
+        state['views'][(parameter, wfo)] = state['views'].get((parameter, wfo), 0) + 1
+    print(f"[view] {parameter} | {wfo} | {hour_offset:+d}h", flush=True)
+
+
+def usage_summary():
+    views = _shared_state()['views']
+    if not views:
+        return
+    with st.expander("Most-viewed maps since the app last restarted"):
+        top = sorted(views.items(), key=lambda kv: -kv[1])[:15]
+        st.markdown("\n".join(f"- {p} | {w}: **{n}**" for (p, w), n in top))
+
+
 def start_background_prefetch(parameter, wfo):
     """After the current map is on screen: download the previous 6 hours (once per file) and
     pre-render the current parameter/sector for each, so moving the slider is instant."""
@@ -214,7 +277,7 @@ def start_background_prefetch(parameter, wfo):
             except Exception:
                 continue
 
-    threading.Thread(target=_worker, daemon=True).start()
+    threading.Thread(target=_worker, daemon=True, name='prefetch').start()
 
 
 # --- CACHING GEOMETRIES & PRE-PROJECTED COORDINATES ---
@@ -2468,11 +2531,80 @@ def _draw_sfc_barbs(ax, cfg, ds_active, _crop, lons_c, lats_c, skip_barb, barb_l
 # --- CACHED FAST PNG RENDERER (Native Lambert Conformal Grid + Spatial Crop) ---
 # SPEEDUP: no ttl. The file path is already part of the cache key, so a new NOMADS cycle gets
 # new maps automatically; the old ttl=300 threw away every finished map every 5 minutes.
+def _draw_base_layers(ax, wfo, lon_min, lon_max, lat_min, lat_max, ocean_color, layer='all'):
+    """Ocean, counties, state lines, coasts, borders, lakes and CWA outlines (everything that never changes).
+    layer: 'ocean' = ocean fill only, 'lines' = everything except the ocean, 'all' = both."""
+    # MEMORY: fixed 50m detail. Cartopy's default switches to the very large 10m files when zoomed in.
+    if layer in ('all', 'ocean'):
+        ax.add_feature(cfeature.OCEAN.with_scale('50m'), facecolor=ocean_color, zorder=1)
+    if layer == 'ocean':
+        return
+    # SPC look: thin red CWA outlines underneath, gray state lines drawn on top of them
+    ax.add_feature(cfeature.STATES.with_scale('50m'), edgecolor=STATE_LINE_COLOR, linewidth=STATE_LINE_WIDTH, zorder=STATE_ZORDER)
+    # Coastlines and country borders in the same gray (outlines Mexico; the states layer has no Mexican states)
+    ax.add_feature(cfeature.COASTLINE.with_scale('50m'), edgecolor=STATE_LINE_COLOR, linewidth=STATE_LINE_WIDTH, zorder=STATE_ZORDER)
+    ax.add_feature(cfeature.BORDERS.with_scale('50m'), edgecolor=STATE_LINE_COLOR, linewidth=STATE_LINE_WIDTH, zorder=STATE_ZORDER)
+    # Great Salt Lake and Lake Okeechobee, same gray as the states
+    lakes = _near(load_extra_lakes(), lon_min, lon_max, lat_min, lat_max)
+    if lakes:
+        ax.add_geometries(lakes, ccrs.PlateCarree(), edgecolor=STATE_LINE_COLOR, facecolor='none',
+                          linewidth=STATE_LINE_WIDTH, zorder=STATE_ZORDER)
+    # U.S. counties: lightest gray, thinnest line, underneath everything else on the base map
+    counties = load_county_geometries('20m' if wfo == 'Full CONUS' else '5m')
+    if wfo != 'Full CONUS':
+        counties = _near(counties, lon_min, lon_max, lat_min, lat_max)
+    if counties:
+        ax.add_geometries(counties, ccrs.PlateCarree(), edgecolor=COUNTY_LINE_COLOR, facecolor='none',
+                          linewidth=COUNTY_LINE_WIDTH, zorder=COUNTY_ZORDER)
+
+    if _CWA_GEOMETRY_CACHE is not None:
+        if wfo == 'Full CONUS':
+            geoms_to_draw = _CWA_GEOMETRY_CACHE
+        else:
+            bbox_poly = shapely_box(lon_min - 1.0, lat_min - 1.0, lon_max + 1.0, lat_max + 1.0)
+            geoms_to_draw = [g for g in _CWA_GEOMETRY_CACHE if g.intersects(bbox_poly)]
+        if geoms_to_draw:
+            ax.add_geometries(
+                geoms_to_draw, ccrs.PlateCarree(),
+                edgecolor=CWA_LINE_COLOR, facecolor='none', linewidth=CWA_LINE_WIDTH, alpha=1.0, zorder=CWA_ZORDER
+            )
+
+
+
+@st.cache_resource(max_entries=24, show_spinner=False)
+def _base_map_image(wfo, extent, ocean_color, layer, has_cwa):
+    """Draw the base map once for this area as a transparent image. Returns (RGBA array, projected extent)."""
+    lon_min, lon_max, lat_min, lat_max = extent
+    fig = Figure(figsize=(8.3, 6.0), dpi=RENDER_DPI * BASEMAP_SUPERSAMPLE)
+    canvas = FigureCanvasAgg(fig)
+    ax = fig.add_axes([0, 0, 1, 1], projection=PROJECTION)
+    ax.set_extent(list(extent), crs=ccrs.PlateCarree())
+    x0, x1 = ax.get_xlim(); y0, y1 = ax.get_ylim()
+    fig.set_size_inches(8.3, 8.3 * (y1 - y0) / (x1 - x0))
+    fig.patch.set_alpha(0.0)
+    ax.set_facecolor('none')
+    try:
+        ax.spines['geo'].set_visible(False)
+    except Exception:
+        pass
+    _draw_base_layers(ax, wfo, lon_min, lon_max, lat_min, lat_max, ocean_color, layer)
+    canvas.draw()
+    bbox = ax.get_window_extent()              # exact pixel box of the map area
+    rgba = np.asarray(canvas.buffer_rgba())
+    h = rgba.shape[0]
+    img = rgba[int(round(h - bbox.y1)):int(round(h - bbox.y0)), int(round(bbox.x0)):int(round(bbox.x1))].copy()
+    x0, x1 = ax.get_xlim(); y0, y1 = ax.get_ylim()
+    fig.clear()
+    return img, (x0, x1, y0, y1)
+
+
 def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
     from matplotlib.colors import LinearSegmentedColormap
 
+    t_start = time.perf_counter()
     ds_active, lons, lats, x_proj, y_proj = get_domain_dataset_and_grid(file_path, wfo)
     data, wind_data, extra_fields = get_parameter_data(ds_active, parameter)
+    t_data = time.perf_counter()
 
     extent = WFO_DOMAINS.get(wfo, [-126.0, -66.0, 23.0, 50.0])
     lon_min, lon_max, lat_min, lat_max = extent
@@ -2519,37 +2651,26 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
     ax = fig.add_subplot(1, 1, 1, projection=PROJECTION)
     ax.set_extent(extent, crs=ccrs.PlateCarree())
 
-    # MEMORY: fixed 50m detail. Cartopy's default switches to the very large 10m files when zoomed in.
-    ax.add_feature(cfeature.OCEAN.with_scale('50m'), facecolor=PARAMETERS[parameter].get('ocean_color', OCEAN_COLOR), zorder=1)
-    # SPC look: thin red CWA outlines underneath, gray state lines drawn on top of them
-    ax.add_feature(cfeature.STATES.with_scale('50m'), edgecolor=STATE_LINE_COLOR, linewidth=STATE_LINE_WIDTH, zorder=STATE_ZORDER)
-    # Coastlines and country borders in the same gray (outlines Mexico; the states layer has no Mexican states)
-    ax.add_feature(cfeature.COASTLINE.with_scale('50m'), edgecolor=STATE_LINE_COLOR, linewidth=STATE_LINE_WIDTH, zorder=STATE_ZORDER)
-    ax.add_feature(cfeature.BORDERS.with_scale('50m'), edgecolor=STATE_LINE_COLOR, linewidth=STATE_LINE_WIDTH, zorder=STATE_ZORDER)
-    # Great Salt Lake and Lake Okeechobee, same gray as the states
-    lakes = _near(load_extra_lakes(), lon_min, lon_max, lat_min, lat_max)
-    if lakes:
-        ax.add_geometries(lakes, ccrs.PlateCarree(), edgecolor=STATE_LINE_COLOR, facecolor='none',
-                          linewidth=STATE_LINE_WIDTH, zorder=STATE_ZORDER)
-    # U.S. counties: lightest gray, thinnest line, underneath everything else on the base map
-    counties = load_county_geometries('20m' if wfo == 'Full CONUS' else '5m')
-    if wfo != 'Full CONUS':
-        counties = _near(counties, lon_min, lon_max, lat_min, lat_max)
-    if counties:
-        ax.add_geometries(counties, ccrs.PlateCarree(), edgecolor=COUNTY_LINE_COLOR, facecolor='none',
-                          linewidth=COUNTY_LINE_WIDTH, zorder=COUNTY_ZORDER)
-
-    if _CWA_GEOMETRY_CACHE is not None:
-        if wfo == 'Full CONUS':
-            geoms_to_draw = _CWA_GEOMETRY_CACHE
-        else:
-            bbox_poly = shapely_box(lon_min - 1.0, lat_min - 1.0, lon_max + 1.0, lat_max + 1.0)
-            geoms_to_draw = [g for g in _CWA_GEOMETRY_CACHE if g.intersects(bbox_poly)]
-        if geoms_to_draw:
-            ax.add_geometries(
-                geoms_to_draw, ccrs.PlateCarree(),
-                edgecolor=CWA_LINE_COLOR, facecolor='none', linewidth=CWA_LINE_WIDTH, alpha=1.0, zorder=CWA_ZORDER
-            )
+    ocean_color = PARAMETERS[parameter].get('ocean_color', OCEAN_COLOR)
+    used_cached_base = False
+    if BASEMAP_CACHE_ENABLED:
+        try:
+            # Two images so the stacking matches the old vector drawing: the ocean sits under every data
+            # layer (some fills use matplotlib's default level 1), and the county/state/CWA lines sit at 1.1-1.3.
+            has_cwa = _CWA_GEOMETRY_CACHE is not None
+            ocean_img, base_ext = _base_map_image(wfo, tuple(extent), ocean_color, 'ocean', has_cwa)
+            lines_img, _ = _base_map_image(wfo, tuple(extent), ocean_color, 'lines', has_cwa)
+            ax.imshow(ocean_img, extent=base_ext, origin='upper', transform=ax.projection,
+                      interpolation='antialiased', zorder=0.95)
+            ax.imshow(lines_img, extent=base_ext, origin='upper', transform=ax.projection,
+                      interpolation='antialiased', zorder=1.15)
+            ax.set_xlim(base_ext[0], base_ext[1]); ax.set_ylim(base_ext[2], base_ext[3])
+            used_cached_base = True
+        except Exception as e:
+            print(f"[basemap] cached base map failed, drawing directly: {e}", flush=True)
+    if not used_cached_base:
+        _draw_base_layers(ax, wfo, lon_min, lon_max, lat_min, lat_max, ocean_color)
+    t_base = time.perf_counter()
 
     cfg = PARAMETERS[parameter]
 
@@ -3053,9 +3174,16 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         fontsize=11.5, fontweight='bold', pad=10
     )
 
+    t_plot = time.perf_counter()
     buf = io.BytesIO()
     fig.savefig(buf, format='png', bbox_inches='tight', pad_inches=0.18, dpi=RENDER_DPI)
     fig.clear()
+    t_end = time.perf_counter()
+    if LOG_TIMINGS:
+        who = 'background' if threading.current_thread().name.startswith(('predraw', 'prefetch')) else 'user'
+        print(f"[timing] {parameter} | {wfo} | data {t_data - t_start:.1f}s | base map {t_base - t_data:.1f}s"
+              f"{' (cached)' if used_cached_base else ''} | fields {t_plot - t_base:.1f}s | save {t_end - t_plot:.1f}s"
+              f" | total {t_end - t_start:.1f}s | {who}", flush=True)
     return buf.getvalue()
 
 
@@ -3075,13 +3203,26 @@ def _release_freed_memory():
         pass
 
 
-@st.cache_data(max_entries=64, show_spinner=False)
+@st.cache_data(max_entries=160, show_spinner=False)   # room for all CONUS maps of the hour + others
 def render_map_png(file_path, parameter, wfo='Full CONUS'):
-    with _shared_state()['render_slots']:
+    state = _shared_state()
+    is_background = threading.current_thread().name.startswith(('predraw', 'prefetch'))
+    if not is_background:
+        with state['lock']:
+            state['users_waiting'] += 1
+    try:
+        state['render_slots'].acquire()
+    finally:
+        if not is_background:
+            with state['lock']:
+                state['users_waiting'] -= 1
+    try:
         try:
             return _draw_map_png(file_path, parameter, wfo)
         finally:
             _release_freed_memory()
+    finally:
+        state['render_slots'].release()
 
 
 # --- LIVE GREEN STATUS BANNER ---
@@ -3230,7 +3371,10 @@ def _render_dashboard():
 
         # Now that the user has a map, get the older hours ready in the background
         start_background_prefetch(param_sel, wfo_sel)
+        start_conus_predraw()
+        record_view(param_sel, wfo_sel, hour_offset)
         memory_readout()
+        usage_summary()
 
     except Exception as e:
         st.error(f"Error loading or rendering map: {e}")
