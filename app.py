@@ -1398,6 +1398,10 @@ _spc_set('Mid-Level Lapse Rate (700-500mb)', linewidths=1.0)   # same as low-lev
 _spc_set('100mb Mixed-Layer LCL Height (m)',
          linewidths=[1.1 if v <= 1250 else 0.6 for v in PARAMETERS['100mb Mixed-Layer LCL Height (m)']['levels']])
 
+# Surface vorticity: same smoothing (~12 km), contours from 4 every 2, only near 0-3km CAPE >= 10 J/kg (+15 km buffer)
+_spc_set('Sfc Vorticity / Sfc - 3km MLCAPE', vort_levels=list(range(4, 42, 2)),
+         vort_cape_min=10.0, vort_cape_buffer_km=15.0)
+
 PARAMETERS.pop('10m Wind Speed (kt)', None)   # removed from the app
 
 SPC_CATEGORIES = {
@@ -2789,8 +2793,19 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
     elif cfg['plot_type'] == 'vort_mlcape3':
         vort_1e5, cape_3km = data
         u_kt, v_kt = _crop(wind_data[0]), _crop(wind_data[1])
-        vort_sub = ndimage.gaussian_filter(np.nan_to_num(_crop(vort_1e5), nan=0.0), sigma=cfg.get('vort_smoothing', 4.0))[::skip_fill, ::skip_fill]
-        cape_sub = ndimage.gaussian_filter(np.nan_to_num(_crop(cape_3km), nan=0.0), sigma=cfg.get('cape_smoothing', 1.5))[::skip_fill, ::skip_fill]
+        vort_full = ndimage.gaussian_filter(np.nan_to_num(_crop(vort_1e5), nan=0.0), sigma=cfg.get('vort_smoothing', 4.0))
+        cape_full = ndimage.gaussian_filter(np.nan_to_num(_crop(cape_3km), nan=0.0), sigma=cfg.get('cape_smoothing', 1.5))
+        # Draw vorticity only where there is some 0-3km CAPE to stretch it (plus a distance buffer for
+        # uncertainty in where the CAPE edge is). The vorticity values themselves are untouched.
+        thr = cfg.get('vort_cape_min')
+        if thr is not None:
+            near_cape = cape_full >= thr
+            buf_pts = int(round(cfg.get('vort_cape_buffer_km', 0.0) / HRRR_DX_KM))
+            if buf_pts > 0:
+                near_cape = ndimage.binary_dilation(near_cape, iterations=buf_pts)
+            vort_full = np.where(near_cape, vort_full, np.nan)
+        vort_sub = vort_full[::skip_fill, ::skip_fill]
+        cape_sub = cape_full[::skip_fill, ::skip_fill]
         cs_vort = ax.contour(x_sub, y_sub, vort_sub, levels=cfg['vort_levels'], colors=cfg.get('vort_color', '#0099ff'), linewidths=cfg.get('vort_linewidth', 1.0), zorder=2)
         ax.clabel(cs_vort, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE)
         cs_cape3 = ax.contour(x_sub, y_sub, cape_sub, levels=cfg['cape3_levels'],
