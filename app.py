@@ -21,6 +21,7 @@ import matplotlib.colors as mcolors
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from cartopy.io.shapereader import Reader
+import cartopy.io.shapereader as shpreader
 from shapely.geometry import box as shapely_box
 import xarray as xr
 import metpy.calc as mpcalc
@@ -78,6 +79,10 @@ HEIGHT_LINE_WIDTH = 1.2        # upper-air height lines (was 1.5)
 ISOBAR_ZORDER = 5.0
 CWA_ZORDER = 1.3
 STATE_ZORDER = 1.2
+COUNTY_ZORDER = 1.1
+COUNTY_LINE_COLOR = '#cccacc'  # a shade lighter than the state gray
+COUNTY_LINE_WIDTH = 0.25       # thinner than the CWA outlines
+OCEAN_COLOR = 'white'          # SPC leaves water white
 
 
 # --- NOMADS: ONE SHARED RUN LIST + ONE-TIME FILE DOWNLOADS ---
@@ -242,6 +247,43 @@ def load_geometries():
 
 
 WFO_DOMAINS, _CWA_GEOMETRY_CACHE = load_geometries()
+
+# --- Extra base-map layers: U.S. counties (Census cartographic boundaries) and two lakes ---
+_NON_CONUS_STATEFP = {'02', '15', '60', '66', '69', '72', '78'}   # AK, HI, territories
+
+
+@st.cache_resource(show_spinner=False)
+def load_county_geometries(scale):
+    """Census county outlines. scale '20m' (light, for Full CONUS) or '5m' (more detail, for CWA views)."""
+    for year in (2024, 2023):
+        url = f"https://www2.census.gov/geo/tiger/GENZ{year}/shp/cb_{year}_us_county_{scale}.zip"
+        try:
+            return [rec.geometry for rec in Reader(url).records()
+                    if str(rec.attributes.get('STATEFP', '')) not in _NON_CONUS_STATEFP]
+        except Exception:
+            continue
+    return []
+
+
+@st.cache_resource(show_spinner=False)
+def load_extra_lakes():
+    """Great Salt Lake and Lake Okeechobee outlines (Natural Earth 10m lakes; only these two are kept)."""
+    try:
+        path = shpreader.natural_earth(resolution='10m', category='physical', name='lakes')
+        keep = []
+        for rec in shpreader.Reader(path).records():
+            name = str(rec.attributes.get('name') or rec.attributes.get('NAME') or '').lower()
+            if 'great salt' in name or 'okeechobee' in name:
+                keep.append(rec.geometry)
+        return keep
+    except Exception:
+        return []
+
+
+def _near(geoms, lon_min, lon_max, lat_min, lat_max, pad=1.0):
+    w, e, s, n = lon_min - pad, lon_max + pad, lat_min - pad, lat_max + pad
+    return [g for g in geoms if g.bounds[0] < e and g.bounds[2] > w and g.bounds[1] < n and g.bounds[3] > s]
+
 
 
 @st.cache_resource(show_spinner=False)
@@ -1338,6 +1380,8 @@ _spc_set('MSLP, Theta-E, & Wind', smooth_sigma_km_conus=36.0)
 for _n in ('850mb Wind Speed (kt)', '500mb Wind Speed (kt)', '300mb Wind Speed (kt)'):
     _spc_set(_n, isotach_outline='#144e8c', isotach_tint=0.35)
 
+PARAMETERS.pop('10m Wind Speed (kt)', None)   # removed from the app
+
 SPC_CATEGORIES = {
     'Surface': [
         'Surface Temp, Dewpoint, and PMSL',
@@ -1345,7 +1389,6 @@ SPC_CATEGORIES = {
         'MSLP, Theta-E, & Wind',
         'Moisture Convergence & Mixing Ratio',
         'Mixing Ratio / Theta',
-        '10m Wind Speed (kt)',
     ],
     'Upper Air': [
         '850mb Wind Speed (kt)',
@@ -2451,9 +2494,24 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
     ax.set_extent(extent, crs=ccrs.PlateCarree())
 
     # MEMORY: fixed 50m detail. Cartopy's default switches to the very large 10m files when zoomed in.
-    ax.add_feature(cfeature.OCEAN.with_scale('50m'), facecolor=PARAMETERS[parameter].get('ocean_color', 'lightskyblue'), zorder=1)
+    ax.add_feature(cfeature.OCEAN.with_scale('50m'), facecolor=PARAMETERS[parameter].get('ocean_color', OCEAN_COLOR), zorder=1)
     # SPC look: thin red CWA outlines underneath, gray state lines drawn on top of them
     ax.add_feature(cfeature.STATES.with_scale('50m'), edgecolor=STATE_LINE_COLOR, linewidth=STATE_LINE_WIDTH, zorder=STATE_ZORDER)
+    # Coastlines and country borders in the same gray (outlines Mexico; the states layer has no Mexican states)
+    ax.add_feature(cfeature.COASTLINE.with_scale('50m'), edgecolor=STATE_LINE_COLOR, linewidth=STATE_LINE_WIDTH, zorder=STATE_ZORDER)
+    ax.add_feature(cfeature.BORDERS.with_scale('50m'), edgecolor=STATE_LINE_COLOR, linewidth=STATE_LINE_WIDTH, zorder=STATE_ZORDER)
+    # Great Salt Lake and Lake Okeechobee, same gray as the states
+    lakes = _near(load_extra_lakes(), lon_min, lon_max, lat_min, lat_max)
+    if lakes:
+        ax.add_geometries(lakes, ccrs.PlateCarree(), edgecolor=STATE_LINE_COLOR, facecolor='none',
+                          linewidth=STATE_LINE_WIDTH, zorder=STATE_ZORDER)
+    # U.S. counties: lightest gray, thinnest line, underneath everything else on the base map
+    counties = load_county_geometries('20m' if wfo == 'Full CONUS' else '5m')
+    if wfo != 'Full CONUS':
+        counties = _near(counties, lon_min, lon_max, lat_min, lat_max)
+    if counties:
+        ax.add_geometries(counties, ccrs.PlateCarree(), edgecolor=COUNTY_LINE_COLOR, facecolor='none',
+                          linewidth=COUNTY_LINE_WIDTH, zorder=COUNTY_ZORDER)
 
     if _CWA_GEOMETRY_CACHE is not None:
         if wfo == 'Full CONUS':
