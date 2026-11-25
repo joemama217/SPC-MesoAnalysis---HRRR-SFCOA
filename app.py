@@ -73,6 +73,12 @@ CWA_LINE_WIDTH = 0.45
 ISOBAR_WIDTH = 1.4             # MSLP isobars on every map (was 1.8-2.0)
 HEIGHT_LINE_WIDTH = 1.2        # upper-air height lines (was 1.5)
 
+# Layering, top to bottom: isobars/heights > everything plotted > red CWA outlines > gray state lines.
+# (Swap the two base-map numbers to put state lines over the CWA outlines instead.)
+ISOBAR_ZORDER = 5.0
+CWA_ZORDER = 1.3
+STATE_ZORDER = 1.2
+
 
 # --- NOMADS: ONE SHARED RUN LIST + ONE-TIME FILE DOWNLOADS ---
 # SPEEDUP: previously every slider position scraped NOMADS separately (its own 5-minute cache per
@@ -1325,6 +1331,13 @@ _spc_set('Dendritic Growth Layer Depth & RH',
          rh_colors=['#cc8604', '#cc8604', '#04ce04', '#04ce04', '#048a04'],
          rh_fill_hatch=True, rh_fill_color='#048a04')
 
+# --- Readability round 2 ---
+_spc_set('Surface Temp, Dewpoint, and PMSL', temp_linewidth=0.55, freeze_linewidth=1.5, dwpt_linewidth=0.9,
+         smooth_sigma_km_conus=36.0)
+_spc_set('MSLP, Theta-E, & Wind', smooth_sigma_km_conus=36.0)
+for _n in ('850mb Wind Speed (kt)', '500mb Wind Speed (kt)', '300mb Wind Speed (kt)'):
+    _spc_set(_n, isotach_outline='#144e8c', isotach_tint=0.35)
+
 SPC_CATEGORIES = {
     'Surface': [
         'Surface Temp, Dewpoint, and PMSL',
@@ -2324,8 +2337,12 @@ def get_parameter_data(ds_main, param_key):
 HRRR_DX_KM = 3.0
 
 def _sigma_pts(cfg, wfo):
-    """Gaussian smoothing width in grid points from a width in km (0 = off)."""
-    return float(cfg.get('smooth_sigma_km', 0.0)) / HRRR_DX_KM
+    """Gaussian smoothing width in grid points from a width in km (0 = off).
+    Full CONUS uses 'smooth_sigma_km_conus' when set, since a whole-country view needs smoother lines."""
+    km = cfg.get('smooth_sigma_km', 0.0)
+    if wfo == 'Full CONUS':
+        km = cfg.get('smooth_sigma_km_conus', km)
+    return float(km) / HRRR_DX_KM
 
 
 def _smooth(arr, sigma):
@@ -2343,8 +2360,12 @@ def _smooth(arr, sigma):
     return out
 
 
-def _hatched_bands(ax, x, y, z, levels, colors, hatch='////', zorder=1.5):
-    """SPC-style colored diagonal hatching, one color per band, transparent between lines."""
+def _hatched_bands(ax, x, y, z, levels, colors, hatch='////', zorder=1.5, tint_alpha=0.0):
+    """SPC-style colored diagonal hatching, one color per band, transparent between lines.
+    tint_alpha > 0 adds a see-through fill in a lighter shade of each band's color underneath."""
+    if tint_alpha > 0:
+        tints = [tuple(0.5 + 0.5 * c for c in mcolors.to_rgb(col)) for col in colors]   # halfway to white
+        ax.contourf(x, y, z, levels=levels, colors=tints, alpha=tint_alpha, zorder=zorder - 0.05)
     for lo, hi, col in zip(levels[:-1], levels[1:], colors):
         with matplotlib.rc_context({'hatch.color': col, 'hatch.linewidth': 0.9}):
             cs = ax.contourf(x, y, z, levels=[lo, hi], colors='none', hatches=[hatch], zorder=zorder)
@@ -2432,7 +2453,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
     # MEMORY: fixed 50m detail. Cartopy's default switches to the very large 10m files when zoomed in.
     ax.add_feature(cfeature.OCEAN.with_scale('50m'), facecolor=PARAMETERS[parameter].get('ocean_color', 'lightskyblue'), zorder=1)
     # SPC look: thin red CWA outlines underneath, gray state lines drawn on top of them
-    ax.add_feature(cfeature.STATES.with_scale('50m'), edgecolor=STATE_LINE_COLOR, linewidth=STATE_LINE_WIDTH, zorder=3.1)
+    ax.add_feature(cfeature.STATES.with_scale('50m'), edgecolor=STATE_LINE_COLOR, linewidth=STATE_LINE_WIDTH, zorder=STATE_ZORDER)
 
     if _CWA_GEOMETRY_CACHE is not None:
         if wfo == 'Full CONUS':
@@ -2443,7 +2464,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         if geoms_to_draw:
             ax.add_geometries(
                 geoms_to_draw, ccrs.PlateCarree(),
-                edgecolor=CWA_LINE_COLOR, facecolor='none', linewidth=CWA_LINE_WIDTH, alpha=1.0, zorder=3.0
+                edgecolor=CWA_LINE_COLOR, facecolor='none', linewidth=CWA_LINE_WIDTH, alpha=1.0, zorder=CWA_ZORDER
             )
 
     cfg = PARAMETERS[parameter]
@@ -2483,7 +2504,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
 
         # 2. Dewpoint: blue dashed every 4 F
         cs_td = ax.contour(x_sub, y_sub, td_s, levels=cfg['dwpt_levels'], colors=cfg['dwpt_color'],
-                           linestyles='dashed', linewidths=1.5, zorder=2.0)
+                           linestyles='dashed', linewidths=cfg.get('dwpt_linewidth', 1.5), zorder=2.0)
         ax.clabel(cs_td, inline=True, fmt='%d', fontsize=8, colors=cfg['dwpt_color'])
 
         # 3. Temperature: solid every 5 F, colored by range, plus a bold 32 F line
@@ -2491,13 +2512,13 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         c_cold, c_mild, c_warm = cfg['temp_colors']
         t_levels = list(cfg['temp_levels'])
         t_colors = [c_cold if t <= cold_max else (c_mild if t <= mild_max else c_warm) for t in t_levels]
-        cs_t = ax.contour(x_sub, y_sub, t_s, levels=t_levels, colors=t_colors, linewidths=1.0, zorder=2.1)
+        cs_t = ax.contour(x_sub, y_sub, t_s, levels=t_levels, colors=t_colors, linewidths=cfg.get('temp_linewidth', 1.0), zorder=2.1)
         ax.clabel(cs_t, inline=True, fmt='%d', fontsize=8)
-        cs_frz = ax.contour(x_sub, y_sub, t_s, levels=[32], colors=cfg['freeze_color'], linewidths=2.6, zorder=2.2)
+        cs_frz = ax.contour(x_sub, y_sub, t_s, levels=[32], colors=cfg['freeze_color'], linewidths=cfg.get('freeze_linewidth', 2.6), zorder=2.2)
         ax.clabel(cs_frz, inline=True, fmt='%d', fontsize=8.5)
 
         # 4. MSLP: black solid every 4 hPa
-        cs_mslp = ax.contour(x_sub, y_sub, p_s, levels=cfg['mslp_levels'], colors='black', linewidths=ISOBAR_WIDTH, zorder=2.4)
+        cs_mslp = ax.contour(x_sub, y_sub, p_s, levels=cfg['mslp_levels'], colors='black', linewidths=ISOBAR_WIDTH, zorder=ISOBAR_ZORDER)
         ax.clabel(cs_mslp, inline=True, fmt='%d', fontsize=9, colors='black')
 
         # 5. 10 m wind barbs
@@ -2525,7 +2546,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         ax.clabel(cs_te, inline=True, fmt='%d', fontsize=8)
 
         # 2. MSLP: black solid every 2 hPa
-        cs_mslp = ax.contour(x_sub, y_sub, p_s, levels=cfg['mslp_levels'], colors='black', linewidths=ISOBAR_WIDTH, zorder=2.4)
+        cs_mslp = ax.contour(x_sub, y_sub, p_s, levels=cfg['mslp_levels'], colors='black', linewidths=ISOBAR_WIDTH, zorder=ISOBAR_ZORDER)
         ax.clabel(cs_mslp, inline=True, fmt='%d', fontsize=9, colors='black')
 
         # 3. 10 m wind barbs
@@ -2817,7 +2838,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         start, stop, step = cfg['contour_range']
         clevs = np.arange(start, stop, step)
         cs = ax.contour(x_sub, y_sub, _crop(data)[::skip_fill, ::skip_fill], levels=clevs,
-                        colors=cfg['color'], linewidths=cfg.get('linewidth', 1.5), zorder=2)
+                        colors=cfg['color'], linewidths=cfg.get('linewidth', 1.5), zorder=ISOBAR_ZORDER)
         ax.clabel(cs, inline=True, fmt='%d', fontsize=9)
         _draw_sfc_barbs(ax, cfg, ds_active, _crop, lons_c, lats_c, skip_barb)
 
@@ -2851,7 +2872,8 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         elif cfg.get('isotach_levels'):
             # SPC style: hatched isotach bands + legend, thin navy outlines
             speed_sub = _crop(data)[::skip_fill, ::skip_fill]
-            _hatched_bands(ax, x_sub, y_sub, speed_sub, cfg['isotach_levels'], cfg['isotach_colors'], zorder=1.5)
+            _hatched_bands(ax, x_sub, y_sub, speed_sub, cfg['isotach_levels'], cfg['isotach_colors'], zorder=1.5,
+                           tint_alpha=cfg.get('isotach_tint', 0.0))
             _band_legend(fig, ax, cfg['isotach_levels'], cfg['isotach_colors'], 'Isotachs (kt)')
             if cfg.get('isotach_outline', '#144e8c'):
                 ax.contour(x_sub, y_sub, speed_sub, levels=cfg['isotach_levels'][:-1],
@@ -2867,7 +2889,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
 
         if 'height_levels' in cfg and 'heights_dam' in extra_fields:
             hght_sub = ndimage.gaussian_filter(_crop(extra_fields['heights_dam']), sigma=3)[::skip_fill, ::skip_fill]
-            cs_h = ax.contour(x_sub, y_sub, hght_sub, levels=cfg['height_levels'], colors='black', linewidths=HEIGHT_LINE_WIDTH, zorder=2.4)
+            cs_h = ax.contour(x_sub, y_sub, hght_sub, levels=cfg['height_levels'], colors='black', linewidths=HEIGHT_LINE_WIDTH, zorder=ISOBAR_ZORDER)
             ax.clabel(cs_h, inline=True, fmt='%d', fontsize=9, colors='black')
 
         if 'temp_levels' in cfg and 'temp_c' in extra_fields:
