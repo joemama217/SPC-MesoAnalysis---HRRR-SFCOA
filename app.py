@@ -72,7 +72,9 @@ STATE_LINE_WIDTH = 0.9
 CWA_LINE_COLOR = '#fc0204'     # SPC's red CWA outlines
 CWA_LINE_WIDTH = 0.45
 ISOBAR_WIDTH = 1.4             # MSLP isobars on every map (was 1.8-2.0)
-HEIGHT_LINE_WIDTH = 1.2        # upper-air height lines (was 1.5)
+HEIGHT_LINE_WIDTH = 0.9        # upper-air height lines (was 1.5, then 1.2)
+BARB_LENGTH = 5.0              # wind barb size on CWA views
+BARB_LENGTH_CONUS = 4.0        # smaller barbs on Full CONUS
 
 # Layering, top to bottom: isobars/heights > everything plotted > red CWA outlines > gray state lines.
 # (Swap the two base-map numbers to put state lines over the CWA outlines instead.)
@@ -1380,6 +1382,20 @@ _spc_set('MSLP, Theta-E, & Wind', smooth_sigma_km_conus=36.0)
 for _n in ('850mb Wind Speed (kt)', '500mb Wind Speed (kt)', '300mb Wind Speed (kt)'):
     _spc_set(_n, isotach_outline='#144e8c', isotach_tint=0.35)
 
+# --- Readability round 3: thinner contours, smaller / sparser CONUS barbs ---
+for _n in ('500mb Wind Speed (kt)', '300mb Wind Speed (kt)'):
+    _spc_set(_n, conus_barb_thin=1.5)                     # ~1/3 fewer barbs each way on Full CONUS
+_spc_set('300mb Wind Speed (kt)', div_linewidth=0.9)
+_spc_set('Sfc Vorticity / Sfc - 3km MLCAPE', vort_linewidth=0.7,
+         cape3_linewidths=[1.0] * len(PARAMETERS.get('Sfc Vorticity / Sfc - 3km MLCAPE', {}).get('cape3_levels', [])))
+_spc_set('Moisture Convergence & Mixing Ratio', mconv_linewidth=0.9)
+_spc_set('Mixing Ratio / Theta', theta_linewidth=0.7)
+for _n in ('Surface-Based CAPE & CIN', '100mb Mixed-Layer CAPE & CIN'):
+    _spc_set(_n, cape_linewidths=[0.6 if v < 1000 else 1.1 for v in PARAMETERS[_n]['cape_levels']])
+_spc_set('Mid-Level Lapse Rate (700-500mb)', linewidths=1.0)   # same as low-level lapse rates
+_spc_set('100mb Mixed-Layer LCL Height (m)',
+         linewidths=[1.1 if v <= 1250 else 0.6 for v in PARAMETERS['100mb Mixed-Layer LCL Height (m)']['levels']])
+
 PARAMETERS.pop('10m Wind Speed (kt)', None)   # removed from the app
 
 SPC_CATEGORIES = {
@@ -2427,7 +2443,7 @@ def _band_legend(fig, ax, levels, colors, label):
     return cb
 
 
-def _draw_sfc_barbs(ax, cfg, ds_active, _crop, lons_c, lats_c, skip_barb):
+def _draw_sfc_barbs(ax, cfg, ds_active, _crop, lons_c, lats_c, skip_barb, barb_len=5.0):
     """10 m wind barbs (kt) for maps that SPC draws with surface wind, when the map's cfg sets 'sfc_barbs'."""
     if not cfg.get('sfc_barbs'):
         return
@@ -2438,7 +2454,7 @@ def _draw_sfc_barbs(ax, cfg, ds_active, _crop, lons_c, lats_c, skip_barb):
         return
     ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
              u[::skip_barb, ::skip_barb], v[::skip_barb, ::skip_barb],
-             length=5, color=cfg.get('barb_color', 'black'), linewidth=0.6,
+             length=barb_len, color=cfg.get('barb_color', 'black'), linewidth=0.6,
              transform=ccrs.PlateCarree(), zorder=3)
 
 
@@ -2455,11 +2471,12 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
     lon_min, lon_max, lat_min, lat_max = extent
 
     # Crop 2D grid to the selected sector (+buffer) for 15x faster plotting & zero contour artifacts
+    cfg_pre = PARAMETERS[parameter]
     ny, nx = lons.shape
     if wfo == 'Full CONUS':
         r0, r1, c0, c1 = 0, ny, 0, nx
         skip_fill = 4
-        skip_barb = 45
+        skip_barb = int(45 * cfg_pre.get('conus_barb_thin', 1.0))
     else:
         pad = 1.5
         mask = (
@@ -2474,6 +2491,8 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
             r0, r1, c0, c1 = 0, ny, 0, nx
         skip_fill = 1
         skip_barb = max(6, int(min(r1 - r0, c1 - c0) / 14))
+
+    barb_len = BARB_LENGTH_CONUS if wfo == 'Full CONUS' else BARB_LENGTH
 
     def _crop(arr):
         return arr[r0:r1, c0:c1]
@@ -2544,9 +2563,10 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
                                 linestyles='dashed', linewidths=0.9, zorder=1.8)
             ax.clabel(cs_mrl, inline=True, fmt='%d', fontsize=7.5)
         th_c = cfg.get('theta_color', 'red')
-        cs_theta = ax.contour(x_sub, y_sub, th_sub, levels=np.arange(240, 360, 2), colors=th_c, linewidths=1.2, zorder=2)
+        cs_theta = ax.contour(x_sub, y_sub, th_sub, levels=np.arange(240, 360, 2), colors=th_c,
+                              linewidths=cfg.get('theta_linewidth', 1.2), zorder=2)
         ax.clabel(cs_theta, inline=True, fmt='%d', fontsize=8, colors=th_c)
-        _draw_sfc_barbs(ax, cfg, ds_active, _crop, lons_c, lats_c, skip_barb)
+        _draw_sfc_barbs(ax, cfg, ds_active, _crop, lons_c, lats_c, skip_barb, barb_len)
 
     elif cfg['plot_type'] == 'sfc_composite':
         t2m_f, d2m_f, mslp = data
@@ -2583,7 +2603,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         u_c, v_c = _crop(u_val), _crop(v_val)
         ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
                  u_c[::skip_barb, ::skip_barb], v_c[::skip_barb, ::skip_barb],
-                 length=5, color=cfg['barb_color'], linewidth=0.6, transform=ccrs.PlateCarree(), zorder=3)
+                 length=barb_len, color=cfg['barb_color'], linewidth=0.6, transform=ccrs.PlateCarree(), zorder=3)
 
     elif cfg['plot_type'] == 'theta_e_composite':
         theta_e, mslp = data
@@ -2611,7 +2631,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         u_c, v_c = _crop(u_val), _crop(v_val)
         ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
                  u_c[::skip_barb, ::skip_barb], v_c[::skip_barb, ::skip_barb],
-                 length=5, color=cfg['barb_color'], linewidth=0.6, transform=ccrs.PlateCarree(), zorder=3)
+                 length=barb_len, color=cfg['barb_color'], linewidth=0.6, transform=ccrs.PlateCarree(), zorder=3)
 
     elif cfg['plot_type'] == 'moisture_convergence':
         mr, mconv = data
@@ -2626,12 +2646,12 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
             ax.clabel(cs_mrl, inline=True, fmt='%d', fontsize=7.5, colors='black')
         mc_c = cfg.get('mconv_color', 'darkblue')
         cs_mc = ax.contour(x_sub, y_sub, _crop(mconv)[::skip_fill, ::skip_fill], levels=cfg['mconv_levels'],
-                           colors=mc_c, linewidths=1.5, zorder=2)
+                           colors=mc_c, linewidths=cfg.get('mconv_linewidth', 1.5), zorder=2)
         ax.clabel(cs_mc, inline=True, fmt='%d', fontsize=9, colors=mc_c)
         u_c, v_c = _crop(u_val), _crop(v_val)
         ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
                  u_c[::skip_barb, ::skip_barb], v_c[::skip_barb, ::skip_barb],
-                 length=5, color=cfg.get('barb_color', 'black'), linewidth=0.6, transform=ccrs.PlateCarree(), zorder=3)
+                 length=barb_len, color=cfg.get('barb_color', 'black'), linewidth=0.6, transform=ccrs.PlateCarree(), zorder=3)
 
     elif cfg['plot_type'] == 'custom_contour':
         data_values = _crop(data)
@@ -2673,7 +2693,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         ax.clabel(cs, inline=True, fmt='%d', fontsize=8.5)
         ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
                  u_kt[::skip_barb, ::skip_barb], v_kt[::skip_barb, ::skip_barb],
-                 length=5, color=cfg.get('barb_color', 'peru'), linewidth=0.65, transform=ccrs.PlateCarree(), zorder=3)
+                 length=barb_len, color=cfg.get('barb_color', 'peru'), linewidth=0.65, transform=ccrs.PlateCarree(), zorder=3)
 
     elif cfg['plot_type'] == 'esrh_composite':
         srh, eil_base = data
@@ -2712,7 +2732,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         ax.clabel(cs_srh, inline=True, fmt='%d', fontsize=8.5)
         ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
                  u_kt[::skip_barb, ::skip_barb], v_kt[::skip_barb, ::skip_barb],
-                 length=5, color=cfg.get('barb_color', 'peru'), linewidth=0.65, transform=ccrs.PlateCarree(), zorder=3)
+                 length=barb_len, color=cfg.get('barb_color', 'peru'), linewidth=0.65, transform=ccrs.PlateCarree(), zorder=3)
 
     elif cfg['plot_type'] == 'composite_index':
         idx_val, cin_val = data
@@ -2762,21 +2782,21 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
             u_kt, v_kt = _crop(wind_data[0]), _crop(wind_data[1])
             ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
                      u_kt[::skip_barb, ::skip_barb], v_kt[::skip_barb, ::skip_barb],
-                     length=5, color=cfg.get('barb_color', 'peru'), linewidth=0.65, transform=ccrs.PlateCarree(), zorder=3)
+                     length=barb_len, color=cfg.get('barb_color', 'peru'), linewidth=0.65, transform=ccrs.PlateCarree(), zorder=3)
 
     elif cfg['plot_type'] == 'vort_mlcape3':
         vort_1e5, cape_3km = data
         u_kt, v_kt = _crop(wind_data[0]), _crop(wind_data[1])
         vort_sub = ndimage.gaussian_filter(np.nan_to_num(_crop(vort_1e5), nan=0.0), sigma=cfg.get('vort_smoothing', 4.0))[::skip_fill, ::skip_fill]
         cape_sub = ndimage.gaussian_filter(np.nan_to_num(_crop(cape_3km), nan=0.0), sigma=cfg.get('cape_smoothing', 1.5))[::skip_fill, ::skip_fill]
-        cs_vort = ax.contour(x_sub, y_sub, vort_sub, levels=cfg['vort_levels'], colors=cfg.get('vort_color', '#0099ff'), linewidths=1.0, zorder=2)
+        cs_vort = ax.contour(x_sub, y_sub, vort_sub, levels=cfg['vort_levels'], colors=cfg.get('vort_color', '#0099ff'), linewidths=cfg.get('vort_linewidth', 1.0), zorder=2)
         ax.clabel(cs_vort, inline=True, fmt='%d', fontsize=8)
         cs_cape3 = ax.contour(x_sub, y_sub, cape_sub, levels=cfg['cape3_levels'],
                               colors=cfg['cape3_colors'], linewidths=cfg['cape3_linewidths'], zorder=2.2)
         ax.clabel(cs_cape3, inline=True, fmt='%d', fontsize=8.5)
         ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
                  u_kt[::skip_barb, ::skip_barb], v_kt[::skip_barb, ::skip_barb],
-                 length=5, color=cfg.get('barb_color', 'peru'), linewidth=0.65, transform=ccrs.PlateCarree(), zorder=3)
+                 length=barb_len, color=cfg.get('barb_color', 'peru'), linewidth=0.65, transform=ccrs.PlateCarree(), zorder=3)
 
     elif cfg['plot_type'] == 'moisture_field':
         field_vals = _crop(data)
@@ -2864,7 +2884,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         ax.clabel(cs_conv, inline=True, fmt='%d', fontsize=8.5)
         ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
                  (u_bl * 1.94384)[::skip_barb, ::skip_barb], (v_bl * 1.94384)[::skip_barb, ::skip_barb],
-                 length=4.8, color=cfg.get('barb_color', 'peru'), linewidth=0.6, transform=ccrs.PlateCarree(), zorder=2.5)
+                 length=barb_len, color=cfg.get('barb_color', 'peru'), linewidth=0.6, transform=ccrs.PlateCarree(), zorder=2.5)
         u_c, v_c = np.nan_to_num(u_bl, nan=0.0), np.nan_to_num(v_bl, nan=0.0)
         u_rot, v_rot = PROJECTION.transform_vectors(ccrs.PlateCarree(), lons_c, lats_c, u_c, v_c)
         x_1d = np.linspace(x_c.min(), x_c.max(), 110)
@@ -2898,7 +2918,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         cs = ax.contour(x_sub, y_sub, _crop(data)[::skip_fill, ::skip_fill], levels=clevs,
                         colors=cfg['color'], linewidths=cfg.get('linewidth', 1.5), zorder=ISOBAR_ZORDER)
         ax.clabel(cs, inline=True, fmt='%d', fontsize=9)
-        _draw_sfc_barbs(ax, cfg, ds_active, _crop, lons_c, lats_c, skip_barb)
+        _draw_sfc_barbs(ax, cfg, ds_active, _crop, lons_c, lats_c, skip_barb, barb_len)
 
     elif cfg['plot_type'] == 'filled':
         start, stop, step = cfg['contour_range']
@@ -2912,7 +2932,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
             u_c, v_c = _crop(wind_data[0]), _crop(wind_data[1])
             sb = 15 if wfo == 'Full CONUS' else max(4, skip_barb // 2)
             ax.barbs(lons_c[::sb, ::sb], lats_c[::sb, ::sb], u_c[::sb, ::sb], v_c[::sb, ::sb],
-                     length=5, color='black', linewidth=0.6, transform=ccrs.PlateCarree(), zorder=3)
+                     length=barb_len, color='black', linewidth=0.6, transform=ccrs.PlateCarree(), zorder=3)
 
     elif cfg['plot_type'] == 'upper_air':
         u_c, v_c = _crop(wind_data[0]), _crop(wind_data[1])
@@ -2967,12 +2987,13 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         if 'plot_divergence' in cfg and 'divergence' in extra_fields:
             div_sub = _crop(extra_fields['divergence'])[::skip_fill, ::skip_fill]
             div_c = cfg.get('div_color', 'magenta')
-            cs_d = ax.contour(x_sub, y_sub, div_sub, levels=cfg['div_levels'], colors=div_c, linewidths=1.5, zorder=2.5)
+            cs_d = ax.contour(x_sub, y_sub, div_sub, levels=cfg['div_levels'], colors=div_c,
+                              linewidths=cfg.get('div_linewidth', 1.5), zorder=2.5)
             ax.clabel(cs_d, inline=True, fmt='%d', fontsize=9, colors=div_c)
 
         ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
                  u_c[::skip_barb, ::skip_barb], v_c[::skip_barb, ::skip_barb],
-                 length=5, color=cfg.get('barb_color', 'black'), linewidth=0.6, transform=ccrs.PlateCarree(), zorder=3)
+                 length=barb_len, color=cfg.get('barb_color', 'black'), linewidth=0.6, transform=ccrs.PlateCarree(), zorder=3)
 
     elif cfg['plot_type'] == 'cape_cin':
         cape, cin = data
