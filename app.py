@@ -1387,7 +1387,7 @@ for _n in ('850mb Wind Speed (kt)', '500mb Wind Speed (kt)', '300mb Wind Speed (
 # --- Readability round 3: thinner contours, smaller / sparser CONUS barbs ---
 for _n in ('500mb Wind Speed (kt)', '300mb Wind Speed (kt)'):
     _spc_set(_n, conus_barb_thin=1.5)                     # ~1/3 fewer barbs each way on Full CONUS
-_spc_set('300mb Wind Speed (kt)', div_linewidth=0.9)
+_spc_set('300mb Wind Speed (kt)', div_linewidth=0.9, div_smoothing=6)   # 6 grid pts x 3 km = ~18 km (was 15 pts / ~45 km)
 _spc_set('Sfc Vorticity / Sfc - 3km MLCAPE', vort_linewidth=0.7,
          cape3_linewidths=[1.0] * len(PARAMETERS.get('Sfc Vorticity / Sfc - 3km MLCAPE', {}).get('cape3_levels', [])))
 _spc_set('Moisture Convergence & Mixing Ratio', mconv_linewidth=0.9)
@@ -1400,7 +1400,8 @@ _spc_set('100mb Mixed-Layer LCL Height (m)',
 
 # Surface vorticity: same smoothing (~12 km), contours from 4 every 2, only near 0-3km CAPE >= 10 J/kg (+15 km buffer)
 _spc_set('Sfc Vorticity / Sfc - 3km MLCAPE', vort_levels=list(range(4, 42, 2)),
-         vort_cape_min=10.0, vort_cape_buffer_km=15.0)
+         vort_cape_min=10.0, vort_cape_buffer_km=15.0,
+         vort_faint_color='#b4b4b4', vort_faint_linewidth=0.4)   # outside the CAPE area: faint gray
 
 PARAMETERS.pop('10m Wind Speed (kt)', None)   # removed from the app
 
@@ -2051,7 +2052,7 @@ def get_parameter_data(ds_main, param_key):
             v_metric = lv['vwin'] * units('m/s')
             dx, dy = mpcalc.lat_lon_grid_deltas(ds_main.longitude.values, ds_main.latitude.values)
             div = mpcalc.divergence(u_metric, v_metric, dx=dx, dy=dy) * 1e5
-            extra_fields['divergence'] = ndimage.gaussian_filter(div.magnitude, sigma=15)
+            extra_fields['divergence'] = ndimage.gaussian_filter(div.magnitude, sigma=cfg.get('div_smoothing', 15))  # grid pts (3 km each)
 
         return speed, (u, v), extra_fields
 
@@ -2803,7 +2804,12 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
             buf_pts = int(round(cfg.get('vort_cape_buffer_km', 0.0) / HRRR_DX_KM))
             if buf_pts > 0:
                 near_cape = ndimage.binary_dilation(near_cape, iterations=buf_pts)
+            vort_faint = np.where(near_cape, np.nan, vort_full)[::skip_fill, ::skip_fill]
             vort_full = np.where(near_cape, vort_full, np.nan)
+            # Vorticity away from CAPE: thin light-gray lines, no labels, kept for boundary awareness
+            if cfg.get('vort_faint_color') and np.isfinite(vort_faint).any():
+                ax.contour(x_sub, y_sub, vort_faint, levels=cfg['vort_levels'], colors=cfg['vort_faint_color'],
+                           linewidths=cfg.get('vort_faint_linewidth', 0.4), zorder=1.9)
         vort_sub = vort_full[::skip_fill, ::skip_fill]
         cape_sub = cape_full[::skip_fill, ::skip_fill]
         cs_vort = ax.contour(x_sub, y_sub, vort_sub, levels=cfg['vort_levels'], colors=cfg.get('vort_color', '#0099ff'), linewidths=cfg.get('vort_linewidth', 1.0), zorder=2)
