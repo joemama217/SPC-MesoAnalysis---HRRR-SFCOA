@@ -65,6 +65,14 @@ PROJECTION = ccrs.LambertConformal(
 # Lower to 115 if pages load slowly on poor connections.
 RENDER_DPI = 150
 
+# Map line styling (SPC look). Tweak here to change every map at once.
+STATE_LINE_COLOR = '#a4a2a4'   # SPC's state-line gray
+STATE_LINE_WIDTH = 0.9
+CWA_LINE_COLOR = '#fc0204'     # SPC's red CWA outlines
+CWA_LINE_WIDTH = 0.45
+ISOBAR_WIDTH = 1.4             # MSLP isobars on every map (was 1.8-2.0)
+HEIGHT_LINE_WIDTH = 1.2        # upper-air height lines (was 1.5)
+
 
 # --- NOMADS: ONE SHARED RUN LIST + ONE-TIME FILE DOWNLOADS ---
 # SPEEDUP: previously every slider position scraped NOMADS separately (its own 5-minute cache per
@@ -1251,7 +1259,7 @@ _spc_set('SARS Sig. Hail Percentage',
 
 # --- SPC STYLE MATCHING (batch 3): surface, upper air, moisture ---
 # MSLP: black isobars every 2 hPa with goldenrod 10 m wind barbs
-_spc_set('Mean Sea Level Pressure (hPa)', color='black', linewidth=1.8, contour_range=(940, 1072, 2),
+_spc_set('Mean Sea Level Pressure (hPa)', color='black', linewidth=ISOBAR_WIDTH, contour_range=(940, 1072, 2),
          title='MSL Pressure (hPa) & 10m Wind (kt)', sfc_barbs=True, barb_color=SPC_BARB)
 
 # Mixing ratio / theta: hatched MR bands (SPC legend 9/11/13/15/17/20), blue dashed MR lines,
@@ -1268,10 +1276,13 @@ _spc_set('Moisture Convergence & Mixing Ratio', mr_fill=False, mr_contour_levels
          mconv_color='#fc0204', barb_color='#8c4624')
 
 # 850mb: heights black (3 dam), temp dashed red / blue at or below 0, dewpoint green; no isotach shading
-_spc_set('850mb Wind Speed (kt)', speed_fill=False, temp_dynamic_color=True,
-         temp_cold_color='#0402fc', temp_warm_color='#fc0204',
-         dwpt_levels=list(range(-20, 32, 2)), dwpt_color='#048a04',
-         title='850mb Heights (dam), Temp (°C, dashed), Dewpoint (°C, green) & Wind (kt)')
+_spc_set('850mb Wind Speed (kt)', temp_dynamic_color=True,
+         temp_cold_color='#0402fc', temp_warm_color='#fc0204', dwpt_levels=None,
+         isotach_levels=[25, 30, 35, 40, 45, 50, 55, 60, 70, 80, 400],
+         isotach_colors=['#04eeec', '#1c92fc', '#1c92fc', '#04b2ec', '#04b2ec',
+                         '#8c6acc', '#8c6acc', '#942eec', '#942eec', '#8c028c'],
+         isotach_outline=None, barb_color=SPC_BARB,
+         title='850mb Heights (dam), Temp (°C) & Wind (kt, hatched >= 25 kt)')
 
 # 700mb: same temps; 700-500mb mean RH >= 70% hatched dark green with bright green 70/80/90 lines
 _spc_set('700mb Wind Speed (kt)', temp_dynamic_color=True, temp_cold_color='#0402fc', temp_warm_color='#fc0204',
@@ -1875,6 +1886,48 @@ def compute_ptype_spc(ds_main, z_dim):
 
 
 # --- DATA EXTRACTION ---
+# --- BELOW-GROUND FILL FOR PRESSURE-LEVEL MAPS ---
+# The SFCOA-HRRR file leaves 850/700mb blank wherever that level is underground (most of the West).
+# Model pressure-level output used for maps like SPC's normally extrapolates there instead. We do the
+# same: start from the nearest level above ground and come down to the target level using a standard
+# 6.5 K/km lapse rate (temperature) and the hypsometric equation (height). Winds and moisture take the
+# value from that nearest above-ground level. These are not real observations, only continuity.
+_LAPSE_EXP = 0.190263          # Rd * 6.5 K/km / g
+_RD_OVER_G = 287.05 / 9.80665
+
+
+def _level_fields_filled(ds_main, z_dim, ds_level, level_hpa):
+    names = [n for n in ('tmpk', 'hght', 'uwin', 'vwin', 'mixr') if n in ds_level.data_vars]
+    out = {n: ds_level[n].values.astype(np.float64) for n in names}
+    if 'tmpk' not in out or 'hght' not in out:
+        return out
+    need = ~(np.isfinite(out['tmpk']) & np.isfinite(out['hght']))
+    if not need.any():
+        return out
+    p_all = ds_main[z_dim].values.astype(np.float64)
+    p_hpa = p_all / 100.0 if np.nanmax(p_all) > 2000 else p_all
+    # levels above the target (lower pressure), nearest first
+    for k in [int(k) for k in np.argsort(-p_hpa) if p_hpa[k] < level_hpa - 0.5]:
+        if not need.any():
+            break
+        lev_k = ds_main.isel({z_dim: k})
+        t_k = lev_k['tmpk'].values.astype(np.float64)
+        z_k = lev_k['hght'].values.astype(np.float64)
+        use = need & np.isfinite(t_k) & np.isfinite(z_k)
+        if not use.any():
+            continue
+        p_k = p_hpa[k]
+        t_new = t_k * (level_hpa / p_k) ** _LAPSE_EXP
+        z_new = z_k - _RD_OVER_G * 0.5 * (t_k + t_new) * np.log(level_hpa / p_k)
+        out['tmpk'] = np.where(use, t_new, out['tmpk'])
+        out['hght'] = np.where(use, z_new, out['hght'])
+        for n in ('uwin', 'vwin', 'mixr'):
+            if n in out:
+                out[n] = np.where(use & ~np.isfinite(out[n]), lev_k[n].values.astype(np.float64), out[n])
+        need &= ~use
+    return out
+
+
 def get_parameter_data(ds_main, param_key):
     cfg = PARAMETERS[param_key]
 
@@ -1889,32 +1942,35 @@ def get_parameter_data(ds_main, param_key):
         level = cfg['level']
         target_level = level * 100 if ds_main[z_dim].values[0] > 2000 else level
         ds_level = ds_main.sel({z_dim: target_level}, method='nearest')
+        # Fill points where this level is below ground (the SFCOA file leaves them blank), so contours
+        # run continuously across the high terrain like SPC's maps.
+        lv = _level_fields_filled(ds_main, z_dim, ds_level, level)
 
-        u = ds_level['uwin'].values * cfg['scale']
-        v = ds_level['vwin'].values * cfg['scale']
+        u = lv['uwin'] * cfg['scale']
+        v = lv['vwin'] * cfg['scale']
         speed = np.hypot(u, v)
 
         extra_fields = {}
         if 'height_levels' in cfg:
-            extra_fields['heights_dam'] = ds_level['hght'].values / 10.0
+            extra_fields['heights_dam'] = lv['hght'] / 10.0
         if 'temp_levels' in cfg:
-            extra_fields['temp_c'] = ds_level['tmpk'].values - 273.15
+            extra_fields['temp_c'] = lv['tmpk'] - 273.15
         if cfg.get('plot_rh'):
             target_500 = 500 * 100 if ds_main[z_dim].values[0] > 2000 else 500
             ds_500 = ds_main.sel({z_dim: target_500}, method='nearest')
-            rh_700 = mpcalc.relative_humidity_from_mixing_ratio(700 * units.hPa, ds_level['tmpk'].values * units.K, ds_level['mixr'].values).to('percent')
+            rh_700 = mpcalc.relative_humidity_from_mixing_ratio(700 * units.hPa, lv['tmpk'] * units.K, lv['mixr']).to('percent')
             rh_500 = mpcalc.relative_humidity_from_mixing_ratio(500 * units.hPa, ds_500['tmpk'].values * units.K, ds_500['mixr'].values).to('percent')
             extra_fields['mean_rh'] = (rh_700.magnitude + rh_500.magnitude) / 2.0
-        if cfg.get('dwpt_levels') is not None and 'mixr' in ds_level.data_vars:
-            q = ds_level['mixr'].values.astype(np.float64)
+        if cfg.get('dwpt_levels') is not None and 'mixr' in lv:
+            q = lv['mixr'].astype(np.float64)
             if _mixr_is_g_per_kg(ds_main, z_dim):
                 q = q * 0.001
             e_hpa = np.maximum(level * q / (0.62198 + q), 1e-3)
             ln_e = np.log(e_hpa / 6.112)
             extra_fields['dwpt_c'] = 243.5 * ln_e / (17.67 - ln_e)
         if cfg.get('plot_divergence'):
-            u_metric = ds_level['uwin'].values * units('m/s')
-            v_metric = ds_level['vwin'].values * units('m/s')
+            u_metric = lv['uwin'] * units('m/s')
+            v_metric = lv['vwin'] * units('m/s')
             dx, dy = mpcalc.lat_lon_grid_deltas(ds_main.longitude.values, ds_main.latitude.values)
             div = mpcalc.divergence(u_metric, v_metric, dx=dx, dy=dy) * 1e5
             extra_fields['divergence'] = ndimage.gaussian_filter(div.magnitude, sigma=15)
@@ -2375,7 +2431,8 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
 
     # MEMORY: fixed 50m detail. Cartopy's default switches to the very large 10m files when zoomed in.
     ax.add_feature(cfeature.OCEAN.with_scale('50m'), facecolor=PARAMETERS[parameter].get('ocean_color', 'lightskyblue'), zorder=1)
-    ax.add_feature(cfeature.STATES.with_scale('50m'), edgecolor='black', linewidth=1.0, zorder=3)
+    # SPC look: thin red CWA outlines underneath, gray state lines drawn on top of them
+    ax.add_feature(cfeature.STATES.with_scale('50m'), edgecolor=STATE_LINE_COLOR, linewidth=STATE_LINE_WIDTH, zorder=3.1)
 
     if _CWA_GEOMETRY_CACHE is not None:
         if wfo == 'Full CONUS':
@@ -2386,7 +2443,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         if geoms_to_draw:
             ax.add_geometries(
                 geoms_to_draw, ccrs.PlateCarree(),
-                edgecolor='black', facecolor='none', linewidth=1.1, alpha=0.55, zorder=3
+                edgecolor=CWA_LINE_COLOR, facecolor='none', linewidth=CWA_LINE_WIDTH, alpha=1.0, zorder=3.0
             )
 
     cfg = PARAMETERS[parameter]
@@ -2440,7 +2497,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         ax.clabel(cs_frz, inline=True, fmt='%d', fontsize=8.5)
 
         # 4. MSLP: black solid every 4 hPa
-        cs_mslp = ax.contour(x_sub, y_sub, p_s, levels=cfg['mslp_levels'], colors='black', linewidths=2.0, zorder=2.4)
+        cs_mslp = ax.contour(x_sub, y_sub, p_s, levels=cfg['mslp_levels'], colors='black', linewidths=ISOBAR_WIDTH, zorder=2.4)
         ax.clabel(cs_mslp, inline=True, fmt='%d', fontsize=9, colors='black')
 
         # 5. 10 m wind barbs
@@ -2468,7 +2525,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         ax.clabel(cs_te, inline=True, fmt='%d', fontsize=8)
 
         # 2. MSLP: black solid every 2 hPa
-        cs_mslp = ax.contour(x_sub, y_sub, p_s, levels=cfg['mslp_levels'], colors='black', linewidths=2.0, zorder=2.4)
+        cs_mslp = ax.contour(x_sub, y_sub, p_s, levels=cfg['mslp_levels'], colors='black', linewidths=ISOBAR_WIDTH, zorder=2.4)
         ax.clabel(cs_mslp, inline=True, fmt='%d', fontsize=9, colors='black')
 
         # 3. 10 m wind barbs
@@ -2796,8 +2853,9 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
             speed_sub = _crop(data)[::skip_fill, ::skip_fill]
             _hatched_bands(ax, x_sub, y_sub, speed_sub, cfg['isotach_levels'], cfg['isotach_colors'], zorder=1.5)
             _band_legend(fig, ax, cfg['isotach_levels'], cfg['isotach_colors'], 'Isotachs (kt)')
-            ax.contour(x_sub, y_sub, speed_sub, levels=cfg['isotach_levels'][:-1], colors='#144e8c',
-                       linewidths=0.6, zorder=1.6)
+            if cfg.get('isotach_outline', '#144e8c'):
+                ax.contour(x_sub, y_sub, speed_sub, levels=cfg['isotach_levels'][:-1],
+                           colors=cfg.get('isotach_outline', '#144e8c'), linewidths=0.6, zorder=1.6)
         elif cfg.get('speed_fill', True):
             speed_sub = _crop(data)[::skip_fill, ::skip_fill]
             start, stop, step = cfg['contour_range']
@@ -2809,7 +2867,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
 
         if 'height_levels' in cfg and 'heights_dam' in extra_fields:
             hght_sub = ndimage.gaussian_filter(_crop(extra_fields['heights_dam']), sigma=3)[::skip_fill, ::skip_fill]
-            cs_h = ax.contour(x_sub, y_sub, hght_sub, levels=cfg['height_levels'], colors='black', linewidths=1.5, zorder=2.4)
+            cs_h = ax.contour(x_sub, y_sub, hght_sub, levels=cfg['height_levels'], colors='black', linewidths=HEIGHT_LINE_WIDTH, zorder=2.4)
             ax.clabel(cs_h, inline=True, fmt='%d', fontsize=9, colors='black')
 
         if 'temp_levels' in cfg and 'temp_c' in extra_fields:
@@ -2834,7 +2892,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
 
         ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
                  u_c[::skip_barb, ::skip_barb], v_c[::skip_barb, ::skip_barb],
-                 length=5, color='black', linewidth=0.6, transform=ccrs.PlateCarree(), zorder=3)
+                 length=5, color=cfg.get('barb_color', 'black'), linewidth=0.6, transform=ccrs.PlateCarree(), zorder=3)
 
     elif cfg['plot_type'] == 'cape_cin':
         cape, cin = data
