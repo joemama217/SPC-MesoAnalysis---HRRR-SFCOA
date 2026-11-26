@@ -222,6 +222,7 @@ def start_background_prefetch(parameter, wfo):
 def load_geometries():
     domains = {'Full CONUS': [-126.0, -66.0, 23.0, 50.0]}
     cwa_geoms = None
+    by_domain = {}   # dropdown name -> that office's own outline(s)
     try:
         cwa_shapefile = "https://www.weather.gov/source/gis/Shapefiles/WSOM/w_18mr25.zip"
         reader = Reader(cwa_shapefile)
@@ -231,6 +232,7 @@ def load_geometries():
         for rec in records:
             wfo_id = rec.attributes.get('WFO', '').strip()
             if wfo_id:
+                by_domain.setdefault(f"{wfo_id} ({rec.attributes.get('NAME', 'WFO')})", []).append(rec.geometry)
                 bounds = rec.geometry.bounds
                 if len(bounds) == 4:
                     parsed[f"{wfo_id} ({rec.attributes.get('NAME', 'WFO')})"] = [
@@ -247,10 +249,10 @@ def load_geometries():
             'LKN (Elko, NV)': [-120.0, -113.5, 38.0, 42.5],
             'VEG (Las Vegas, NV)': [-119.0, -112.5, 34.0, 39.0]
         })
-    return domains, cwa_geoms
+    return domains, cwa_geoms, by_domain
 
 
-WFO_DOMAINS, _CWA_GEOMETRY_CACHE = load_geometries()
+WFO_DOMAINS, _CWA_GEOMETRY_CACHE, _CWA_BY_DOMAIN = load_geometries()
 
 # --- Extra base-map layers: U.S. counties (Census cartographic boundaries) and two lakes ---
 _NON_CONUS_STATEFP = {'02', '15', '60', '66', '69', '72', '78'}   # AK, HI, territories
@@ -2543,8 +2545,11 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         if wfo == 'Full CONUS':
             geoms_to_draw = _CWA_GEOMETRY_CACHE
         else:
-            bbox_poly = shapely_box(lon_min - 1.0, lat_min - 1.0, lon_max + 1.0, lat_max + 1.0)
-            geoms_to_draw = [g for g in _CWA_GEOMETRY_CACHE if g.intersects(bbox_poly)]
+            # WFO view: outline only the selected office, not its neighbors
+            geoms_to_draw = _CWA_BY_DOMAIN.get(wfo)
+            if not geoms_to_draw:   # fallback if the office isn't found: old behavior (all nearby outlines)
+                bbox_poly = shapely_box(lon_min - 1.0, lat_min - 1.0, lon_max + 1.0, lat_max + 1.0)
+                geoms_to_draw = [g for g in _CWA_GEOMETRY_CACHE if g.intersects(bbox_poly)]
         if geoms_to_draw:
             ax.add_geometries(
                 geoms_to_draw, ccrs.PlateCarree(),
