@@ -168,9 +168,10 @@ def fetch_run_file(date_str, fname):
                         f.write(chunk)
         os.replace(tmp_path, local_path)
 
-        # Keep the newest 5 runs on disk (latest + 3 past hours + 1 spare) to save disk space
+        # Keep the newest 7 runs on disk: latest + 3 past hours, plus 2 more so the 2-hr pressure
+        # change can be drawn for the oldest slider hour
         cached = sorted(glob.glob("*_spc_post.t*z.sfcoa_hrrr.*.nc"), key=os.path.getmtime, reverse=True)
-        for old_f in cached[5:]:
+        for old_f in cached[7:]:
             try:
                 os.remove(old_f)
             except OSError:
@@ -188,6 +189,28 @@ def download_sfcoa(hour_offset=0):
         note = f"Requested {hour_offset:+d}h; showing the oldest cycle available on NOMADS."
     date_str, fname, _, _ = runs[idx]
     return fetch_run_file(date_str, fname), note, checked_epoch_ms, checked_utc_str
+
+
+def file_hours_before(file_path, hours):
+    """Local path of the analysis `hours` before file_path's hour (downloads it if needed), else None."""
+    try:
+        runs, _, _ = list_available_runs()
+    except Exception:
+        return None
+    base = os.path.basename(file_path)
+    when = {}
+    for date_str, fname, cyc, _ in runs:
+        when[f"{date_str}_{fname}"] = (datetime.strptime(date_str + cyc, "%Y%m%d%H"), date_str, fname)
+    if base not in when:
+        return None
+    target = when[base][0] - timedelta(hours=hours)
+    for t, date_str, fname in when.values():
+        if t == target:
+            try:
+                return fetch_run_file(date_str, fname)
+            except Exception:
+                return None
+    return None
 
 
 def start_background_prefetch(parameter, wfo):
@@ -1407,6 +1430,36 @@ _spc_set('Sfc Vorticity / Sfc - 3km MLCAPE', vort_levels=list(range(4, 42, 2)),
 
 PARAMETERS.pop('10m Wind Speed (kt)', None)   # removed from the app
 
+# --- Frontogenesis, temperature advection and 2-hr pressure change (added Nov 2026) ---
+# Colors approximate SPC's maps; easy to adjust here.
+FGEN_LEVELS = [1, 2, 4, 6, 8, 10, 1000]                      # K/100 km/3 hr
+FGEN_COLORS = ['#1c92fc', '#144e8c', '#fc8204', '#048a04', '#7cdc04', '#fcfc04']
+TADV_LEVELS = [-1000, -40, -20, -10, -5, 5, 10, 20, 40, 1000]  # 10^-5 C/s
+TADV_COLORS = ['#144e8c', '#1c78dc', '#04b2ec', '#04eeec', 'none', '#fcb4b4', '#f47c7c', '#e42c2c', '#b40404']
+for _lev, _hrange in ((925, None), (850, None), (700, None)):
+    PARAMETERS[f'{_lev}mb Frontogenesis'] = {
+        'title': f'{_lev}mb Petterssen Frontogenesis (K/100km/3hr), Heights (m), Temp (°C) & Wind (kt)',
+        'plot_type': 'level_diag', 'diag': 'fgen', 'level': _lev,
+        'smooth_sigma_km': 9.0, 'smooth_sigma_km_conus': 24.0,
+    }
+    PARAMETERS[f'{_lev}mb Temperature Advection'] = {
+        'title': f'{_lev}mb Temperature Advection (10^-5 °C/s), Heights (m), Temp (°C) & Wind (kt)',
+        'plot_type': 'level_diag', 'diag': 'tadv', 'level': _lev,
+        'smooth_sigma_km': 9.0, 'smooth_sigma_km_conus': 24.0,
+    }
+PARAMETERS['Surface Frontogenesis'] = {
+    'title': 'Surface Petterssen Frontogenesis (K/100km/3hr), Theta (K) & 10m Wind (kt)',
+    'plot_type': 'level_diag', 'diag': 'fgen', 'level': 'sfc',
+    'smooth_sigma_km': 9.0, 'smooth_sigma_km_conus': 24.0,
+    'theta_color': '#b40404', 'barb_color': SPC_BARB,
+}
+PARAMETERS['2-hr Surface Pressure Change (mb)'] = {
+    'title': '2-hr Surface Pressure Change (mb), MSLP (hPa) & 10m Wind (kt)',
+    'plot_type': 'pres_change', 'hours_back': 2,
+    'smooth_sigma_km': 9.0, 'smooth_sigma_km_conus': 18.0,
+    'mslp_levels': np.arange(900, 1080, 4), 'barb_color': SPC_BARB,
+}
+
 SPC_CATEGORIES = {
     'Surface': [
         'Surface Temp, Dewpoint, and PMSL',
@@ -1414,12 +1467,20 @@ SPC_CATEGORIES = {
         'MSLP, Theta-E, & Wind',
         'Moisture Convergence & Mixing Ratio',
         'Mixing Ratio / Theta',
+        '2-hr Surface Pressure Change (mb)',
     ],
     'Upper Air': [
         '850mb Wind Speed (kt)',
         '700mb Wind Speed (kt)',
         '500mb Wind Speed (kt)',
         '300mb Wind Speed (kt)',
+        'Surface Frontogenesis',
+        '925mb Frontogenesis',
+        '850mb Frontogenesis',
+        '700mb Frontogenesis',
+        '925mb Temperature Advection',
+        '850mb Temperature Advection',
+        '700mb Temperature Advection',
     ],
     'Thermodynamics': [
         'Surface-Based CAPE & CIN',
@@ -2009,6 +2070,49 @@ def _level_fields_filled(ds_main, z_dim, ds_level, level_hpa):
     return out
 
 
+_EARTH_R = 6371000.0
+
+
+def _earth_gradient_fn(lons, lats):
+    """Returns grad(f) -> (df/dx east, df/dy north) in per-meter units on the curvilinear grid.
+    Uses each point's real east/north spacing, so it matches the earth-relative winds."""
+    lon_r = np.deg2rad(np.asarray(lons, dtype=np.float64))
+    lat_r = np.deg2rad(np.asarray(lats, dtype=np.float64))
+    coslat = np.cos(lat_r)
+    dlon_j, dlon_i = np.gradient(lon_r)
+    dlat_j, dlat_i = np.gradient(lat_r)
+    xe_i = (_EARTH_R * coslat * dlon_i).astype(np.float32); yn_i = (_EARTH_R * dlat_i).astype(np.float32)
+    xe_j = (_EARTH_R * coslat * dlon_j).astype(np.float32); yn_j = (_EARTH_R * dlat_j).astype(np.float32)
+    det = xe_i * yn_j - xe_j * yn_i
+    det = np.where(np.abs(det) < 1.0, np.float32(1.0), det)
+    del lon_r, lat_r, coslat, dlon_j, dlon_i, dlat_j, dlat_i
+
+    def grad(f):
+        f_j, f_i = np.gradient(np.asarray(f, dtype=np.float32))
+        return (f_i * yn_j - f_j * yn_i) / det, (xe_i * f_j - xe_j * f_i) / det
+    return grad
+
+
+DIAG_INPUT_SMOOTH_PTS = 5.0   # ~15 km Gaussian on temperature and wind before taking derivatives
+
+
+def _fgen_and_tadv(grad, temp, u, v, which):
+    """Petterssen frontogenesis (K/100km/3hr) of temp (potential temperature) or
+    temperature advection (10^-5 C/s) of temp."""
+    s = DIAG_INPUT_SMOOTH_PTS
+    t = _smooth(temp, s).astype(np.float32)
+    us = _smooth(u, s).astype(np.float32)
+    vs = _smooth(v, s).astype(np.float32)
+    tx, ty = grad(t)
+    if which == 'tadv':
+        return -(us * tx + vs * ty) * 1e5
+    ux, uy = grad(us)
+    vx, vy = grad(vs)
+    mag = np.maximum(np.hypot(tx, ty), 1e-12)
+    f = -(tx * (tx * ux + ty * vx) + ty * (tx * uy + ty * vy)) / mag
+    return f * 1.08e9   # K/m/s -> K/100km/3hr
+
+
 def get_parameter_data(ds_main, param_key):
     cfg = PARAMETERS[param_key]
 
@@ -2019,7 +2123,36 @@ def get_parameter_data(ds_main, param_key):
     else:
         z_dim = 'pressure'
 
-    if cfg.get('plot_type') == 'upper_air':
+    if cfg.get('plot_type') == 'level_diag':
+        grad = _earth_gradient_fn(ds_main.longitude.values, ds_main.latitude.values)
+        extra_fields = {}
+        if cfg['level'] == 'sfc':
+            t2m = ds_main['tmpk_2m'].values.astype(np.float64)
+            psfc = ds_main['pres_sfc'].values.astype(np.float64)
+            temp = t2m * (100000.0 / psfc) ** 0.2857          # potential temperature (K)
+            u = ds_main['uwin_10m'].values.astype(np.float64)
+            v = ds_main['vwin_10m'].values.astype(np.float64)
+            extra_fields['theta_k'] = temp
+        else:
+            p_vals = ds_main[z_dim].values.astype(np.float64)
+            p_hpa = p_vals / 100.0 if np.nanmax(p_vals) > 2000 else p_vals
+            k = int(np.argmin(np.abs(p_hpa - cfg['level'])))
+            actual = float(p_hpa[k])
+            lv = _level_fields_filled(ds_main, z_dim, ds_main.isel({z_dim: k}), actual)
+            u, v = lv['uwin'], lv['vwin']
+            temp = lv['tmpk'] * (1000.0 / actual) ** 0.2857 if cfg['diag'] == 'fgen' else lv['tmpk']
+            extra_fields['heights_m'] = lv['hght']
+            extra_fields['temp_c'] = lv['tmpk'] - 273.15
+            if abs(actual - cfg['level']) > 1:
+                extra_fields['level_note'] = f" (file has no {cfg['level']}mb; showing {actual:.0f}mb)"
+        field = _fgen_and_tadv(grad, temp, u, v, cfg['diag'])
+        return field, (u * 1.94384, v * 1.94384), extra_fields
+
+    elif cfg.get('plot_type') == 'pres_change':
+        return ((ds_main['pres_msl'].values * 0.01, ds_main['pres_sfc'].values * 0.01),
+                (ds_main['uwin_10m'].values * 1.94384, ds_main['vwin_10m'].values * 1.94384), None)
+
+    elif cfg.get('plot_type') == 'upper_air':
         level = cfg['level']
         target_level = level * 100 if ds_main[z_dim].values[0] > 2000 else level
         ds_level = ds_main.sel({z_dim: target_level}, method='nearest')
@@ -2557,6 +2690,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
             )
 
     cfg = PARAMETERS[parameter]
+    title_note = ''
 
     # Note: All contour / contourf calls plot directly in native (x_sub, y_sub) Lambert Conformal meters
     # without transform=ccrs.PlateCarree(), preventing Cartopy curvilinear wrap lines!
@@ -3023,6 +3157,77 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
                  u_c[::skip_barb, ::skip_barb], v_c[::skip_barb, ::skip_barb],
                  length=barb_len, color=cfg.get('barb_color', 'black'), linewidth=0.6, transform=ccrs.PlateCarree(), zorder=3)
 
+    elif cfg['plot_type'] == 'level_diag':
+        sig = _sigma_pts(cfg, wfo)
+        f_sub = _smooth(_crop(data), sig)[::skip_fill, ::skip_fill]
+        if cfg['diag'] == 'fgen':
+            f_levels, f_colors, f_label = FGEN_LEVELS, FGEN_COLORS, 'Frontogenesis (K/100km/3hr)'
+        else:
+            f_levels, f_colors, f_label = TADV_LEVELS, TADV_COLORS, 'Temperature Advection (10^-5 °C/s)'
+        ax.contourf(x_sub, y_sub, f_sub, levels=f_levels, colors=f_colors, alpha=0.85, zorder=1.5)
+        line_lv = [lv for lv in f_levels if abs(lv) < 1000]
+        cs_f = ax.contour(x_sub, y_sub, f_sub, levels=line_lv, colors='#fc8204', linewidths=0.5, zorder=1.6)
+        if cfg['diag'] == 'tadv':
+            ax.clabel(cs_f, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE, colors='#fc8204')
+        # Legend: every color box, labeled at the box edges (open-ended boxes at the ends)
+        leg_c = [c if c != 'none' else 'white' for c in f_colors]
+        inner = [lv for lv in f_levels if abs(lv) < 1000]
+        edges = ([inner[0] - 1] if f_levels[0] <= -1000 else []) + inner + [inner[-1] + 1]
+        cb = _band_legend(fig, ax, edges, leg_c, f_label)
+        cb.set_ticks(inner)
+        cb.ax.set_xticklabels([str(v) for v in inner])
+
+        if extra_fields.get('heights_m') is not None:
+            h_sub = _smooth(_crop(extra_fields['heights_m']), 3)[::skip_fill, ::skip_fill]
+            cs_h = ax.contour(x_sub, y_sub, h_sub, levels=np.arange(0, 6000, 30), colors='black',
+                              linewidths=HEIGHT_LINE_WIDTH, zorder=ISOBAR_ZORDER)
+            ax.clabel(cs_h, inline=True, fmt='%d', fontsize=ISOBAR_LABEL_SIZE, colors='black')
+        if extra_fields.get('temp_c') is not None:
+            t_sub = _smooth(_crop(extra_fields['temp_c']), 3)[::skip_fill, ::skip_fill]
+            t_levels = np.arange(-50, 40, 2)
+            cs_t = ax.contour(x_sub, y_sub, t_sub, levels=t_levels,
+                              colors=['#0402fc' if t <= 0 else '#fc0204' for t in t_levels],
+                              linestyles='dashed', linewidths=0.7, zorder=2.5)
+            ax.clabel(cs_t, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE)
+        if extra_fields.get('theta_k') is not None:
+            th_sub = _smooth(_crop(extra_fields['theta_k']), max(sig, 3))[::skip_fill, ::skip_fill]
+            th_c = cfg.get('theta_color', '#b40404')
+            cs_th = ax.contour(x_sub, y_sub, th_sub, levels=np.arange(240, 360, 2), colors=th_c,
+                               linewidths=0.7, zorder=2.5)
+            ax.clabel(cs_th, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE, colors=th_c)
+        title_note = extra_fields.get('level_note', '')
+        u_c, v_c = _crop(wind_data[0]), _crop(wind_data[1])
+        ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
+                 u_c[::skip_barb, ::skip_barb], v_c[::skip_barb, ::skip_barb],
+                 length=barb_len, color=cfg.get('barb_color', 'black'), linewidth=0.6,
+                 transform=ccrs.PlateCarree(), zorder=3)
+
+    elif cfg['plot_type'] == 'pres_change':
+        mslp, psfc_now = data
+        sig = _sigma_pts(cfg, wfo)
+        p_s = _smooth(_crop(mslp), sig * 1.5)[::skip_fill, ::skip_fill]
+        prev_path = file_hours_before(file_path, cfg.get('hours_back', 2))
+        if prev_path is not None:
+            ds_prev = get_domain_dataset_and_grid(prev_path, wfo)[0]
+            dp = psfc_now - ds_prev['pres_sfc'].values * 0.01
+            dp_sub = _smooth(_crop(dp), sig)[::skip_fill, ::skip_fill]
+            pos = np.arange(0, 21, 1); neg = np.arange(-20, 0, 1)
+            cs_pos = ax.contour(x_sub, y_sub, dp_sub, levels=pos, colors='#fc0204', linewidths=0.8, zorder=2.5)
+            cs_neg = ax.contour(x_sub, y_sub, dp_sub, levels=neg, colors='#0402fc', linestyles='dashed',
+                                linewidths=1.0, zorder=2.5)
+            ax.clabel(cs_pos, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE, colors='#fc0204')
+            ax.clabel(cs_neg, inline=True, fmt='%d', fontsize=CONTOUR_LABEL_SIZE, colors='#0402fc')
+        else:
+            title_note = ' (2-hr change unavailable: earlier analysis not on NOMADS)'
+        cs_p = ax.contour(x_sub, y_sub, p_s, levels=cfg['mslp_levels'], colors='black',
+                          linewidths=ISOBAR_WIDTH, zorder=ISOBAR_ZORDER)
+        ax.clabel(cs_p, inline=True, fmt='%d', fontsize=ISOBAR_LABEL_SIZE, colors='black')
+        u_c, v_c = _crop(wind_data[0]), _crop(wind_data[1])
+        ax.barbs(lons_c[::skip_barb, ::skip_barb], lats_c[::skip_barb, ::skip_barb],
+                 u_c[::skip_barb, ::skip_barb], v_c[::skip_barb, ::skip_barb],
+                 length=barb_len, color=cfg.get('barb_color', SPC_BARB), linewidth=0.6,
+                 transform=ccrs.PlateCarree(), zorder=3)
+
     elif cfg['plot_type'] == 'cape_cin':
         cape, cin = data
         sigma_val = cfg.get('smoothing', 0)
@@ -3054,7 +3259,7 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
         run_time = 'N/A'
 
     ax.set_title(
-        f"SPC Mesoanalysis: {cfg['title']}\nDomain: {wfo}  |  Run Time: {run_time}",
+        f"SPC Mesoanalysis: {cfg['title']}{title_note}\nDomain: {wfo}  |  Run Time: {run_time}",
         fontsize=11.5, fontweight='bold', pad=10
     )
 
