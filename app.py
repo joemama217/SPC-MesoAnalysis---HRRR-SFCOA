@@ -3164,7 +3164,18 @@ def _draw_map_png(file_path, parameter, wfo='Full CONUS'):
             f_levels, f_colors, f_label = FGEN_LEVELS, FGEN_COLORS, 'Frontogenesis (K/100km/3hr)'
         else:
             f_levels, f_colors, f_label = TADV_LEVELS, TADV_COLORS, 'Temperature Advection (10^-5 °C/s)'
-        ax.contourf(x_sub, y_sub, f_sub, levels=f_levels, colors=f_colors, alpha=0.85, zorder=1.5)
+        # Fill each run of colored bands separately and skip the 'none' (neutral) band: a 'none' color inside
+        # one contourf call turns black once alpha is applied.
+        run_lv, run_c = [f_levels[0]], []
+        for lo, hi, col in zip(f_levels[:-1], f_levels[1:], f_colors):
+            if col == 'none':
+                if run_c:
+                    ax.contourf(x_sub, y_sub, f_sub, levels=run_lv, colors=run_c, alpha=0.85, zorder=1.5)
+                run_lv, run_c = [hi], []
+            else:
+                run_c.append(col); run_lv.append(hi)
+        if run_c:
+            ax.contourf(x_sub, y_sub, f_sub, levels=run_lv, colors=run_c, alpha=0.85, zorder=1.5)
         line_lv = [lv for lv in f_levels if abs(lv) < 1000]
         cs_f = ax.contour(x_sub, y_sub, f_sub, levels=line_lv, colors='#fc8204', linewidths=0.5, zorder=1.6)
         if cfg['diag'] == 'tadv':
